@@ -1,3 +1,8 @@
 cmake_minimum_required(VERSION 3.16.0)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(AGV)
+
+# cmake_minimum_required(VERSION 3.16.0)
+# set(EXTRA_COMPONENT_DIRS components)
+# include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+# project(AGV)

@@ -10,34 +10,20 @@
 #include "logger/logger.h"
 #include "wifi/wifi.h"
 #include "imu/imu.h"
-#include "imu/shtp.h"
 #include "led_buzzer/led_buzzer.h"
 #include "rasp_uart/rasp_uart.h"
 #include "ultrasonic/ultrasonic.h"
+#include "manual_control/manual_control.h"
 #include "tests/test_runner.h"
 
 static const char *TAG = "MAIN";
 
 // Shared data
-static volatile ibus_data_t     g_ibus_data    = {0};
 static volatile rasp_setpoint_t g_setpoint     = {0};
 static volatile float           g_enc_rpm[4]   = {0};
 static volatile int32_t         g_enc_count[4] = {0};
 static volatile imu_data_t      g_imu_data     = {0};
 static volatile us_data_t       g_us_data      = {0};
-
-// ─────────────────────────────────────────
-// CORE 0 - ibus_task (priority 4)
-// ─────────────────────────────────────────
-static void ibus_task(void *pv) {
-    ibus_data_t data;
-    while (1) {
-        if (ibus_read(&data)) {
-            g_ibus_data = data;
-        }
-        vTaskDelay(pdMS_TO_TICKS(20)); // 50Hz
-    }
-}
 
 // ─────────────────────────────────────────
 // CORE 0 - rasp_task (priority 3)
@@ -88,7 +74,7 @@ static void encoder_task(void *pv) {
 static void imu_task(void *pv) {
     imu_data_t data;
     while (1) {
-        if (imu_read(&data)) {
+        if (imu_get(&data)) {
             g_imu_data = data;
         }
         vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
@@ -107,10 +93,14 @@ static void control_task(void *pv) {
             vel.vx = g_setpoint.vx;
             vel.vy = g_setpoint.vy;
             vel.wz = g_setpoint.wz;
-        } else if (g_ibus_data.valid) {
-            vel.vx = ibus_channel_normalized((ibus_data_t*)&g_ibus_data, 1) / 1000.0f;
-            vel.vy = ibus_channel_normalized((ibus_data_t*)&g_ibus_data, 0) / 1000.0f;
-            vel.wz = ibus_channel_normalized((ibus_data_t*)&g_ibus_data, 3) / 1000.0f;
+        } else {
+            // Thread-safe đọc IBus qua ibus_get()
+            ibus_data_t rc;
+            if (ibus_get(&rc)) {
+                vel.vx = ibus_channel_normalized(&rc, 1) / 1000.0f;
+                vel.vy = ibus_channel_normalized(&rc, 0) / 1000.0f;
+                vel.wz = ibus_channel_normalized(&rc, 3) / 1000.0f;
+            }
         }
 
         // 2. Inverse kinematics → wheel speed
@@ -151,12 +141,12 @@ static void control_task(void *pv) {
             .sp_vx    = vel.vx,
             .sp_vy    = vel.vy,
             .sp_wz    = vel.wz,
-            .ax       = g_imu_data.ax,
-            .ay       = g_imu_data.ay,
-            .az       = g_imu_data.az,
-            .gx       = g_imu_data.gx,
-            .gy       = g_imu_data.gy,
-            .gz       = g_imu_data.gz,
+            .ax       = g_imu_data.accel_x,
+            .ay       = g_imu_data.accel_y,
+            .az       = g_imu_data.accel_z,
+            .gx       = g_imu_data.gyro_x,
+            .gy       = g_imu_data.gyro_y,
+            .gz       = g_imu_data.gyro_z,
             .yaw      = g_imu_data.yaw,
             .pitch    = g_imu_data.pitch,
             .roll     = g_imu_data.roll,
@@ -176,7 +166,6 @@ void app_main(void) {
     run_tests();
     return;
 #endif
-
 
     ESP_LOGI(TAG, "AGV starting...");
 
