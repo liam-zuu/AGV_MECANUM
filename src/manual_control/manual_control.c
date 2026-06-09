@@ -84,7 +84,7 @@ void manual_control_task(void *pvParam) {
         // ── Normalize → m/s, rad/s, áp speed limit ───────────────────────────
         agv_velocity_t vel = {
             .vx = norm_to_float(n_vx, MC_VXY_MAX) * speed_lim,
-            .vy = norm_to_float(n_vy, MC_VXY_MAX) * speed_lim,
+            .vy = norm_to_float(n_vy, MC_VXY_MAX) * speed_lim * -1.0f,
             .wz = norm_to_float(n_wz, MC_WZ_MAX)  * speed_lim,
         };
 

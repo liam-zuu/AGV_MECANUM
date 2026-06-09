@@ -30,6 +30,9 @@
 #ifdef TEST_KINEMATICS
 #include "test_kinematics.h"
 #endif
+#ifdef TEST_MANUAL
+#include "test_manual.h"
+#endif
 
 void run_tests(void) {
 #ifdef TEST_MOTOR
@@ -52,5 +55,7 @@ void run_tests(void) {
     test_led_buzzer();
 #elif defined(TEST_KINEMATICS)
     test_kinematics();
+#elif defined(TEST_MANUAL)
+    test_manual();
 #endif
 }
