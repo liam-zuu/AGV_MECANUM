@@ -14,11 +14,11 @@ void test_encoder(void) {
     ESP_LOGI(TAG, "Encoder + Motor test start");
 
     while (1) {
-        ESP_LOGI(TAG, "All forward 50%%");
-        motor_set(MOTOR_FL, 800);
-        motor_set(MOTOR_FR, 800);
-        motor_set(MOTOR_RL, 800);
-        motor_set(MOTOR_RR, 800);
+        ESP_LOGI(TAG, "All forward 60%%");
+        motor_set(MOTOR_FL, 600);
+        motor_set(MOTOR_FR, 600);
+        motor_set(MOTOR_RL, 600);
+        motor_set(MOTOR_RR, 600);
         vTaskDelay(pdMS_TO_TICKS(3000));
 
         motor_stop_all();
