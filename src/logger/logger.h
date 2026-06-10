@@ -7,7 +7,7 @@
 // ─────────────────────────────────────────
 // Config — TODO: đổi IP laptop
 // ─────────────────────────────────────────
-#define LOGGER_PC_IP        "192.168.1.100"
+#define LOGGER_PC_IP        "192.168.10.114"
 #define LOGGER_UDP_PORT     5005
 #define LOGGER_QUEUE_SIZE   32      // buffer 32 frame ở 100Hz = 320ms headroom
 

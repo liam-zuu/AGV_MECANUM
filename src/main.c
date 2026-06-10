@@ -14,9 +14,17 @@
 #include "rasp_uart/rasp_uart.h"
 #include "ultrasonic/ultrasonic.h"
 #include "manual_control/manual_control.h"
+#include "controller/pid.h"
+#include "controller/adrc.h"
 #include "tests/test_runner.h"
 
 static const char *TAG = "MAIN";
+
+// ─── Controller mode ──────────────────────────────────────────────────────────
+// Đổi để chọn controller: CTRL_PID hoặc CTRL_ADRC
+#define CTRL_PID   0
+#define CTRL_ADRC  1
+#define CTRL_MODE  CTRL_PID   // ← đổi ở đây
 
 // Shared data
 static volatile rasp_setpoint_t g_setpoint     = {0};
@@ -24,6 +32,10 @@ static volatile float           g_enc_rpm[4]   = {0};
 static volatile int32_t         g_enc_count[4] = {0};
 static volatile imu_data_t      g_imu_data     = {0};
 static volatile us_data_t       g_us_data      = {0};
+
+// Controllers — chỉ dùng một, chọn bằng CTRL_MODE
+static pid_controller_t  g_pid;
+static adrc_controller_t g_adrc;
 
 // ─────────────────────────────────────────
 // CORE 0 - rasp_task (priority 3)
@@ -85,7 +97,18 @@ static void imu_task(void *pv) {
 // CORE 1 - control_task (priority 5)
 // ─────────────────────────────────────────
 static void control_task(void *pv) {
+    const float dt = 0.01f;   // 100Hz → 10ms
+    int64_t t_prev = esp_timer_get_time();
+
     while (1) {
+        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
+
+        // dt thực tế — tránh spike lần đầu
+        int64_t t_now = esp_timer_get_time();
+        float dt_actual = (t_now - t_prev) * 1e-6f;
+        t_prev = t_now;
+        if (dt_actual <= 0.0f || dt_actual > 0.1f) dt_actual = dt;
+
         // 1. Đọc setpoint — ưu tiên RPi5, fallback IBus
         agv_velocity_t vel = {0};
 
@@ -94,19 +117,47 @@ static void control_task(void *pv) {
             vel.vy = g_setpoint.vy;
             vel.wz = g_setpoint.wz;
         } else {
-            // Thread-safe đọc IBus qua ibus_get()
+            
             ibus_data_t rc;
-            if (ibus_get(&rc)) {
-                vel.vx = ibus_channel_normalized(&rc, 1) / 1000.0f;
-                vel.vy = ibus_channel_normalized(&rc, 0) / 1000.0f;
-                vel.wz = ibus_channel_normalized(&rc, 3) / 1000.0f;
-            }
+                if (ibus_get(&rc)) {
+                    // VRA = channel 5, range [1000, 2000] → scale [0.0, 1.0]
+                    float speed_scale = (float)(rc.channel[5] - 1000) / 1000.0f;
+                    if (speed_scale < 0.0f) speed_scale = 0.0f;
+                    if (speed_scale > 1.0f) speed_scale = 1.0f;
+
+                    vel.vx = ibus_channel_normalized(&rc, 1) / 500.0f * speed_scale;
+                    vel.vy = -ibus_channel_normalized(&rc, 0) / 500.0f * speed_scale;
+                    vel.wz = -ibus_channel_normalized(&rc, 3) / 500.0f * speed_scale;
+                }
         }
 
-        // 2. Inverse kinematics → wheel speed
-        wheel_velocity_t wheels = kinematics_inverse(vel);
+        // 2. Forward kinematics từ encoder → actual velocity
+        wheel_velocity_t enc_wheels = {
+            .fl = g_enc_rpm[ENC_FL] * 2.0f * 3.14159f / 60.0f,
+            .fr = g_enc_rpm[ENC_FR] * 2.0f * 3.14159f / 60.0f,
+            .rl = g_enc_rpm[ENC_RL] * 2.0f * 3.14159f / 60.0f,
+            .rr = g_enc_rpm[ENC_RR] * 2.0f * 3.14159f / 60.0f,
+        };
+        agv_velocity_t actual_vel = kinematics_forward(enc_wheels);
 
-        // 3. Tính PWM — lưu lại để log
+        // 3. Controller — closed-loop velocity control
+        //    Input:  vel (setpoint), actual_vel (feedback từ encoder)
+        //    Output: corrected velocity → inverse kinematics → PWM
+        agv_velocity_t ctrl_out = {0};
+
+#if CTRL_MODE == CTRL_PID
+        ctrl_out.vx = vel.vx + pid_update_vx(&g_pid, vel.vx, actual_vel.vx, dt_actual);
+        ctrl_out.vy = vel.vy + pid_update_vy(&g_pid, vel.vy, actual_vel.vy, dt_actual);
+        ctrl_out.wz = vel.wz + pid_update_wz(&g_pid, vel.wz, actual_vel.wz, dt_actual);
+#elif CTRL_MODE == CTRL_ADRC
+        ctrl_out.vx = vel.vx + adrc_update_vx(&g_adrc, vel.vx, actual_vel.vx, dt_actual);
+        ctrl_out.vy = vel.vy + adrc_update_vy(&g_adrc, vel.vy, actual_vel.vy, dt_actual);
+        ctrl_out.wz = vel.wz + adrc_update_wz(&g_adrc, vel.wz, actual_vel.wz, dt_actual);
+#endif
+
+        // 4. Inverse kinematics → wheel speed → PWM
+        wheel_velocity_t wheels = kinematics_inverse(ctrl_out);
+
         int pwm_fl = kinematics_radps_to_pwm(wheels.fl);
         int pwm_fr = kinematics_radps_to_pwm(wheels.fr);
         int pwm_rl = kinematics_radps_to_pwm(wheels.rl);
@@ -117,21 +168,12 @@ static void control_task(void *pv) {
         motor_set(MOTOR_RL, pwm_rl);
         motor_set(MOTOR_RR, pwm_rr);
 
-        // 4. Forward kinematics từ encoder
-        wheel_velocity_t enc_wheels = {
-            .fl = g_enc_rpm[ENC_FL] * 2.0f * 3.14159f / 60.0f,
-            .fr = g_enc_rpm[ENC_FR] * 2.0f * 3.14159f / 60.0f,
-            .rl = g_enc_rpm[ENC_RL] * 2.0f * 3.14159f / 60.0f,
-            .rr = g_enc_rpm[ENC_RR] * 2.0f * 3.14159f / 60.0f,
-        };
-        agv_velocity_t actual_vel = kinematics_forward(enc_wheels);
-
         // 5. Gửi status về RPi5
         rasp_uart_send_status(actual_vel.vx, actual_vel.vy, actual_vel.wz);
 
         // 6. Push log
         log_data_t log = {
-            .timestamp_us = esp_timer_get_time(),
+            .timestamp_us = t_now,
             .fl_count = g_enc_count[ENC_FL],
             .fr_count = g_enc_count[ENC_FR],
             .rl_count = g_enc_count[ENC_RL],
@@ -146,10 +188,10 @@ static void control_task(void *pv) {
             .sp_vx    = vel.vx,
             .sp_vy    = vel.vy,
             .sp_wz    = vel.wz,
-            .pwm_fl   = pwm_fl,      // thêm
-            .pwm_fr   = pwm_fr,      // thêm
-            .pwm_rl   = pwm_rl,      // thêm
-            .pwm_rr   = pwm_rr,      // thêm
+            .pwm_fl   = pwm_fl,
+            .pwm_fr   = pwm_fr,
+            .pwm_rl   = pwm_rl,
+            .pwm_rr   = pwm_rr,
             .ax       = g_imu_data.accel_x,
             .ay       = g_imu_data.accel_y,
             .az       = g_imu_data.accel_z,
@@ -161,8 +203,6 @@ static void control_task(void *pv) {
             .roll     = g_imu_data.roll,
         };
         logger_push(&log);
-
-        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
     }
 }
 
@@ -191,6 +231,15 @@ void app_main(void) {
     ultrasonic_init();
     rasp_uart_init();
     logger_init();
+
+    // Init controller
+#if CTRL_MODE == CTRL_PID
+    pid_init(&g_pid);
+    ESP_LOGI(TAG, "Controller: PID");
+#elif CTRL_MODE == CTRL_ADRC
+    adrc_init(&g_adrc);
+    ESP_LOGI(TAG, "Controller: ADRC");
+#endif
 
     // Enable motor
     motor_enable(true);

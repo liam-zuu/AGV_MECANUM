@@ -13,7 +13,7 @@ static const char *TAG = "IMU";
 #define IMU_CLK     GPIO_NUM_12
 #define IMU_CS      GPIO_NUM_10
 #define IMU_INT     GPIO_NUM_14
-#define IMU_RST     GPIO_NUM_NC   // kéo lên 3.3V qua 10K, không dùng GPIO
+#define IMU_RST     GPIO_NUM_1    // share với buzzer — thư viện dùng để hard reset BNO085
 
 // ─── Globals ──────────────────────────────────────────────────────────────────
 static BNO08x          *g_imu       = nullptr;
@@ -45,40 +45,37 @@ extern "C" void imu_init(void) {
     // Enable các report cần dùng
     // 50ms interval = 20Hz — đủ cho AGV
     g_imu->rpt.accelerometer.enable(50000UL);   // accelerometer (m/s²)
-    g_imu->rpt.cal_gyro.enable(50000UL);        // gyro (rad/s) — quan trọng nhất cho heading
+    g_imu->rpt.cal_gyro.enable(50000UL);        // gyro calibrated (rad/s) — heading control
     g_imu->rpt.rv_game.enable(50000UL);         // game rotation vector → euler angles
 
-    // Callback: tự động cập nhật g_data mỗi khi có data mới
+    // Callback: cập nhật từng field riêng lẻ — KHÔNG zero out toàn bộ g_data
+    // Vì mỗi report có rate riêng, callback fire nhiều lần, mỗi lần chỉ có 1 report có data mới
     g_imu->register_cb([](uint8_t rpt_id) {
-        imu_data_t tmp = {};
+        if (xSemaphoreTakeFromISR(g_mutex, nullptr) != pdTRUE) return;
 
         if (g_imu->rpt.accelerometer.has_new_data()) {
             auto a = g_imu->rpt.accelerometer.get();
-            tmp.accel_x = a.x;
-            tmp.accel_y = a.y;
-            tmp.accel_z = a.z;
+            g_data.accel_x = a.x;
+            g_data.accel_y = a.y;
+            g_data.accel_z = a.z;
         }
 
         if (g_imu->rpt.cal_gyro.has_new_data()) {
             auto g = g_imu->rpt.cal_gyro.get();
-            tmp.gyro_x = g.x;
-            tmp.gyro_y = g.y;
-            tmp.gyro_z = g.z;   // wz — dùng cho heading control
+            g_data.gyro_x = g.x;
+            g_data.gyro_y = g.y;
+            g_data.gyro_z = g.z;   // wz — dùng cho heading control
         }
 
         if (g_imu->rpt.rv_game.has_new_data()) {
             auto e = g_imu->rpt.rv_game.get_euler();
-            tmp.roll  = e.x;
-            tmp.pitch = e.y;
-            tmp.yaw   = e.z;
+            g_data.roll  = e.x;
+            g_data.pitch = e.y;
+            g_data.yaw   = e.z;
         }
 
-        tmp.valid = true;
-
-        if (xSemaphoreTakeFromISR(g_mutex, nullptr) == pdTRUE) {
-            g_data = tmp;
-            xSemaphoreGiveFromISR(g_mutex, nullptr);
-        }
+        g_data.valid = true;
+        xSemaphoreGiveFromISR(g_mutex, nullptr);
     });
 
     ESP_LOGI(TAG, "BNO085 init OK — accel/gyro/euler @ 20Hz");
