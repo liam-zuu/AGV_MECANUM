@@ -49,7 +49,7 @@ void ultrasonic_read_all(us_data_t *data) {
 
     // Trigger chung 1 lần
     gpio_set_level(ULTRASONIC_TRIG, 1);
-    esp_rom_delay_us(10);
+    esp_rom_delay_us(20);
     gpio_set_level(ULTRASONIC_TRIG, 0);
 
     // Đọc ECHO song song
