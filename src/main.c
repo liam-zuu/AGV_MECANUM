@@ -106,11 +106,16 @@ static void control_task(void *pv) {
         // 2. Inverse kinematics → wheel speed
         wheel_velocity_t wheels = kinematics_inverse(vel);
 
-        // 3. Set motor
-        motor_set(MOTOR_FL, kinematics_radps_to_pwm(wheels.fl));
-        motor_set(MOTOR_FR, kinematics_radps_to_pwm(wheels.fr));
-        motor_set(MOTOR_RL, kinematics_radps_to_pwm(wheels.rl));
-        motor_set(MOTOR_RR, kinematics_radps_to_pwm(wheels.rr));
+        // 3. Tính PWM — lưu lại để log
+        int pwm_fl = kinematics_radps_to_pwm(wheels.fl);
+        int pwm_fr = kinematics_radps_to_pwm(wheels.fr);
+        int pwm_rl = kinematics_radps_to_pwm(wheels.rl);
+        int pwm_rr = kinematics_radps_to_pwm(wheels.rr);
+
+        motor_set(MOTOR_FL, pwm_fl);
+        motor_set(MOTOR_FR, pwm_fr);
+        motor_set(MOTOR_RL, pwm_rl);
+        motor_set(MOTOR_RR, pwm_rr);
 
         // 4. Forward kinematics từ encoder
         wheel_velocity_t enc_wheels = {
@@ -141,6 +146,10 @@ static void control_task(void *pv) {
             .sp_vx    = vel.vx,
             .sp_vy    = vel.vy,
             .sp_wz    = vel.wz,
+            .pwm_fl   = pwm_fl,      // thêm
+            .pwm_fr   = pwm_fr,      // thêm
+            .pwm_rl   = pwm_rl,      // thêm
+            .pwm_rr   = pwm_rr,      // thêm
             .ax       = g_imu_data.accel_x,
             .ay       = g_imu_data.accel_y,
             .az       = g_imu_data.accel_z,

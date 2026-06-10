@@ -4,12 +4,16 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define LOGGER_UDP_PORT     5005
-// TODO: điền IP laptop
+// ─────────────────────────────────────────
+// Config — TODO: đổi IP laptop
+// ─────────────────────────────────────────
 #define LOGGER_PC_IP        "192.168.1.100"
+#define LOGGER_UDP_PORT     5005
+#define LOGGER_QUEUE_SIZE   32      // buffer 32 frame ở 100Hz = 320ms headroom
 
-#define LOGGER_QUEUE_SIZE   20
-
+// ─────────────────────────────────────────
+// Log data struct
+// ─────────────────────────────────────────
 typedef struct {
     int64_t timestamp_us;
 
@@ -17,20 +21,30 @@ typedef struct {
     int32_t fl_count, fr_count, rl_count, rr_count;
     float   fl_rpm,   fr_rpm,   rl_rpm,   rr_rpm;
 
-    // Velocity
+    // Velocity actual (forward kinematics)
     float vx, vy, wz;
 
-    // Setpoint
+    // Setpoint (từ IBus hoặc RPi5)
     float sp_vx, sp_vy, sp_wz;
 
-    // IMU
+    // PWM command (-1000 ~ +1000)
+    int pwm_fl, pwm_fr, pwm_rl, pwm_rr;
+
+    // IMU — accelerometer (m/s²)
     float ax, ay, az;
+
+    // IMU — gyroscope (rad/s)
     float gx, gy, gz;
+
+    // IMU — euler (degrees)
     float yaw, pitch, roll;
 } log_data_t;
 
+// ─────────────────────────────────────────
+// API
+// ─────────────────────────────────────────
 void logger_init(void);
-void logger_push(const log_data_t *data);  // Gọi từ main task
-void logger_task(void *pv);                // Chạy task riêng
+void logger_push(const log_data_t *data);   // non-blocking, gọi từ control_task
+void logger_task(void *pv);                 // tạo task trong app_main, core 0
 
-#endif
+#endif // LOGGER_H
