@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include <math.h>
+#include <stdlib.h>
 
 static const char *TAG = "TEST_IMU";
 
@@ -107,6 +108,82 @@ static void test_5_euler_yaw(void) {
         ESP_LOGW(TAG, "[WARN] Test 5 — delta=%.1f (expect ~90). Co xoay du 90 do khong?", delta);
 }
 
+// ─── Test 6: Noise variance — input cho imu_model.m ──────────────────────────
+// Board đứng yên hoàn toàn, 30s × 20Hz = 600 samples
+// Output: mean + variance của gyro_z, accel_x, accel_y, accel_z
+// Copy số này thẳng vào imu_model.m (sigma_gyro, sigma_accel)
+#define T6_N_SAMPLES  600   /* 30s × 20Hz */
+
+static void test_6_noise_variance(void) {
+    ESP_LOGI(TAG, "=== TEST 6: Noise variance — DAT BOARD PHANG, KHONG CHAM 30 GIAY ===");
+    ESP_LOGI(TAG, "  Thu thap %d samples (30s)...", T6_N_SAMPLES);
+    vTaskDelay(pdMS_TO_TICKS(2000));  /* cho người dùng đặt board xuống */
+
+    /* Welford online algorithm — tránh tích lũy float lớn */
+    double mean_gz = 0, M2_gz = 0;
+    double mean_ax = 0, M2_ax = 0;
+    double mean_ay = 0, M2_ay = 0;
+    double mean_az = 0, M2_az = 0;
+    int n = 0;
+
+    for (int i = 0; i < T6_N_SAMPLES; i++) {
+        vTaskDelay(pdMS_TO_TICKS(50));  /* 20Hz */
+        imu_data_t d = {};
+        if (!imu_get(&d) || !d.valid) continue;
+
+        n++;
+        /* Welford update */
+        double delta;
+        delta = d.gyro_z  - mean_gz; mean_gz += delta/n; M2_gz += delta*(d.gyro_z  - mean_gz);
+        delta = d.accel_x - mean_ax; mean_ax += delta/n; M2_ax += delta*(d.accel_x - mean_ax);
+        delta = d.accel_y - mean_ay; mean_ay += delta/n; M2_ay += delta*(d.accel_y - mean_ay);
+        delta = d.accel_z - mean_az; mean_az += delta/n; M2_az += delta*(d.accel_z - mean_az);
+
+        /* Progress mỗi 5 giây */
+        if ((i + 1) % 100 == 0)
+            ESP_LOGI(TAG, "  [%ds] gz=%.4f ax=%.4f ay=%.4f az=%.4f",
+                     (i+1)/20, d.gyro_z, d.accel_x, d.accel_y, d.accel_z);
+    }
+
+    if (n < 10) {
+        ESP_LOGE(TAG, "[FAIL] Test 6 — qua it sample (%d), IMU co dang chay?", n);
+        return;
+    }
+
+    double var_gz = M2_gz / (n - 1);
+    double var_ax = M2_ax / (n - 1);
+    double var_ay = M2_ay / (n - 1);
+    double var_az = M2_az / (n - 1);
+
+    double sig_gz = sqrt(var_gz);
+    double sig_ax = sqrt(var_ax);
+    double sig_ay = sqrt(var_ay);
+    double sig_az = sqrt(var_az);
+
+    ESP_LOGI(TAG, "");
+    ESP_LOGI(TAG, "=== TEST 6 RESULT — %d samples ===", n);
+    ESP_LOGI(TAG, "  gyro_z  : mean=%.5f rad/s   std=%.5f   var=%.7f",
+             mean_gz, sig_gz, var_gz);
+    ESP_LOGI(TAG, "  accel_x : mean=%.4f m/s2    std=%.5f   var=%.7f",
+             mean_ax, sig_ax, var_ax);
+    ESP_LOGI(TAG, "  accel_y : mean=%.4f m/s2    std=%.5f   var=%.7f",
+             mean_ay, sig_ay, var_ay);
+    ESP_LOGI(TAG, "  accel_z : mean=%.4f m/s2    std=%.5f   var=%.7f",
+             mean_az, sig_az, var_az);
+    ESP_LOGI(TAG, "");
+    ESP_LOGI(TAG, "--- Copy vao imu_model.m ---");
+    ESP_LOGI(TAG, "  sigma_gyro  = %.5f;  %% rad/s (gyro_z std)", sig_gz);
+    ESP_LOGI(TAG, "  sigma_accel = %.5f;  %% m/s2  (accel xy, lay trung binh)");
+    ESP_LOGI(TAG, "    accel_x std=%.5f  accel_y std=%.5f", sig_ax, sig_ay);
+    ESP_LOGI(TAG, "  bias_gyro_z = %.5f;  %% rad/s (mean offset)", mean_gz);
+
+    /* Pass/warn dựa trên datasheet BNO085 (typical noise floor) */
+    if (sig_gz < 0.01f)
+        ESP_LOGI(TAG, "[PASS] Test 6 — gyro noise OK (sig_gz < 0.01 rad/s)");
+    else
+        ESP_LOGW(TAG, "[WARN] Test 6 — sig_gz=%.5f > 0.01, co the chua warm up / co rung dong", sig_gz);
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 extern "C" void test_imu(void) {
     ESP_LOGI(TAG, "=== BNO085 IMU TEST START ===");
@@ -121,6 +198,7 @@ extern "C" void test_imu(void) {
     test_3_accel_gravity();
     test_4_gyro_rotation();
     test_5_euler_yaw();
+    test_6_noise_variance();
 
     ESP_LOGI(TAG, "=== ALL IMU TESTS DONE ===");
     vTaskDelete(NULL);
