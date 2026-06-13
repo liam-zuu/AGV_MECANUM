@@ -3,14 +3,10 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 
-static const char *TAG = "ULTRASONIC";
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
-// static const int echo_pins[ULTRASONIC_COUNT] = {
-//     ULTRASONIC_ECHO_0,
-//     ULTRASONIC_ECHO_1,
-//     ULTRASONIC_ECHO_2,
-//     ULTRASONIC_ECHO_3,
-// };
+static const char *TAG = "ULTRASONIC";
 
 static const int echo_pins[ULTRASONIC_COUNT] = {
     ULTRASONIC_ECHO_2,
@@ -49,51 +45,92 @@ void ultrasonic_init(void) {
 }
 
 void ultrasonic_read_all(us_data_t *data) {
-    int64_t start[ULTRASONIC_COUNT]   = {0};
-    int64_t end[ULTRASONIC_COUNT]     = {0};
-    bool    started[ULTRASONIC_COUNT] = {false};
-    bool    done[ULTRASONIC_COUNT]    = {false};
+    for (int i = 0; i < ULTRASONIC_COUNT; i++) {
+        // Trigger
+        gpio_set_level(ULTRASONIC_TRIG, 1);
+        esp_rom_delay_us(20);
+        gpio_set_level(ULTRASONIC_TRIG, 0);
 
-    // Trigger chung 1 lần
-    gpio_set_level(ULTRASONIC_TRIG, 1);
-    esp_rom_delay_us(20);
-    gpio_set_level(ULTRASONIC_TRIG, 0);
-
-    // Đọc ECHO song song
-    int64_t timeout = esp_timer_get_time() + ULTRASONIC_TIMEOUT_US;
-
-    while (esp_timer_get_time() < timeout) {
-        bool all_done = true;
-        for (int i = 0; i < ULTRASONIC_COUNT; i++) {
-            if (done[i]) continue;
-            all_done = false;
-
-            int level = gpio_get_level(echo_pins[i]);
-            if (!started[i] && level) {
-                start[i]   = esp_timer_get_time();
-                started[i] = true;
-            } else if (started[i] && !level) {
-                end[i]  = esp_timer_get_time();
-                done[i] = true;
+        // Chờ ECHO[i] lên
+        int64_t t0 = esp_timer_get_time();
+        while (!gpio_get_level(echo_pins[i])) {
+            if (esp_timer_get_time() - t0 > 5000) {
+                data->distance_cm[i] = -1.0f;
+                data->valid[i]       = false;
+                goto next;
             }
         }
-        if (all_done) break;
-    }
 
-    // Tính distance
-    for (int i = 0; i < ULTRASONIC_COUNT; i++) {
-        if (!done[i]) {
-            data->distance_cm[i] = -1.0f;
-            data->valid[i]       = false;
-            continue;
+        // Đo pulse ECHO[i]
+        {
+            int64_t start = esp_timer_get_time();
+            while (gpio_get_level(echo_pins[i])) {
+                if (esp_timer_get_time() - start > ULTRASONIC_TIMEOUT_US) {
+                    data->distance_cm[i] = -1.0f;
+                    data->valid[i]       = false;
+                    goto next;
+                }
+            }
+            int64_t end = esp_timer_get_time();
+
+            float d = (float)(end - start) * 0.0343f / 2.0f;
+            if (d >= ULTRASONIC_MIN_CM && d <= ULTRASONIC_MAX_CM) {
+                data->distance_cm[i] = d;
+                data->valid[i]       = true;
+            } else {
+                data->distance_cm[i] = -1.0f;
+                data->valid[i]       = false;
+            }
         }
-        float d = (float)(end[i] - start[i]) * 0.0343f / 2.0f;
-        if (d < ULTRASONIC_MIN_CM || d > ULTRASONIC_MAX_CM) {
-            data->distance_cm[i] = -1.0f;
-            data->valid[i]       = false;
-        } else {
-            data->distance_cm[i] = d;
-            data->valid[i]       = true;
-        }
+
+        next:
+        vTaskDelay(pdMS_TO_TICKS(10)); // yield cho RTOS, không block core
     }
 }
+
+// void ultrasonic_read_all(us_data_t *data) {
+//     for (int i = 0; i < ULTRASONIC_COUNT; i++) {
+
+//         // Đợi sóng cũ tắt trước khi trigger mới
+//         esp_rom_delay_us(10000); // 10ms — sóng 4m cần 23ms, 10ms đủ cho range thực tế <2m
+
+//         // Trigger
+//         gpio_set_level(ULTRASONIC_TRIG, 1);
+//         esp_rom_delay_us(20);
+//         gpio_set_level(ULTRASONIC_TRIG, 0);
+
+//         // Chờ ECHO[i] lên
+//         int64_t t0 = esp_timer_get_time();
+//         while (!gpio_get_level(echo_pins[i])) {
+//             if (esp_timer_get_time() - t0 > 5000) {
+//                 data->distance_cm[i] = -1.0f;
+//                 data->valid[i]       = false;
+//                 goto next;
+//             }
+//         }
+
+//         // Đo pulse ECHO[i]
+//         {
+//             int64_t start = esp_timer_get_time();
+//             while (gpio_get_level(echo_pins[i])) {
+//                 if (esp_timer_get_time() - start > ULTRASONIC_TIMEOUT_US) {
+//                     data->distance_cm[i] = -1.0f;
+//                     data->valid[i]       = false;
+//                     goto next;
+//                 }
+//             }
+//             int64_t end = esp_timer_get_time();
+
+//             float d = (float)(end - start) * 0.0343f / 2.0f;
+//             if (d >= ULTRASONIC_MIN_CM && d <= ULTRASONIC_MAX_CM) {
+//                 data->distance_cm[i] = d;
+//                 data->valid[i]       = true;
+//             } else {
+//                 data->distance_cm[i] = -1.0f;
+//                 data->valid[i]       = false;
+//             }
+//         }
+
+//         next:;
+//     }
+// }

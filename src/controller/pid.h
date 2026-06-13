@@ -40,6 +40,10 @@ typedef struct {
 void  pid_init(pid_controller_t *c);
 void  pid_reset(pid_controller_t *c);
 
+void  pid_reset_vx(pid_controller_t *c);   // thêm
+void  pid_reset_vy(pid_controller_t *c);   // thêm
+void  pid_reset_wz(pid_controller_t *c);   // thêm
+
 // Trả về correction velocity (m/s hoặc rad/s) cho từng kênh
 float pid_update_vx(pid_controller_t *c, float sp, float actual, float dt);
 float pid_update_vy(pid_controller_t *c, float sp, float actual, float dt);

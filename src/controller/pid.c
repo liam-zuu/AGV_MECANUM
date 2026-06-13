@@ -103,6 +103,21 @@ void pid_reset(pid_controller_t *c) {
     c->wz.initialized = false;
 }
 
+void pid_reset_vx(pid_controller_t *c) {
+    c->vx.integral   = 0.0f;
+    c->vx.prev_error = 0.0f;
+}
+
+void pid_reset_vy(pid_controller_t *c) {
+    c->vy.integral   = 0.0f;
+    c->vy.prev_error = 0.0f;
+}
+
+void pid_reset_wz(pid_controller_t *c) {
+    c->wz.integral   = 0.0f;
+    c->wz.prev_error = 0.0f;
+}
+
 float pid_update_vx(pid_controller_t *c, float sp, float actual, float dt) {
     return pid_axis_update(&c->vx, sp, actual, dt);
 }

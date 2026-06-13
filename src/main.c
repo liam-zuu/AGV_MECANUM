@@ -1,5 +1,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <string.h>
@@ -37,7 +38,7 @@ static const char *TAG = "MAIN";
 #define CH_SWD  7   // channel 8 — buzzer
 
 // ─── Threshold ────────────────────────────────────────────────────────────────
-#define OBSTACLE_CM     25.0f
+#define OBSTACLE_CM     15.0f      // tăng lên 15cm — US-015 không ổn định dưới 10cm
 #define UART_TIMEOUT_US 200000LL   // 200ms tính bằng µs
 
 // ─── System mode ─────────────────────────────────────────────────────────────
@@ -59,6 +60,7 @@ static volatile float           g_enc_rpm[4]   = {0};
 static volatile int32_t         g_enc_count[4] = {0};
 static volatile imu_data_t      g_imu_data     = {0};
 static volatile us_data_t       g_us_data      = {0};
+static SemaphoreHandle_t        g_us_mutex;        // bảo vệ g_us_data khỏi race condition dual-core
 
 static pid_controller_t g_pid;
 // static adrc_controller_t g_adrc;
@@ -81,14 +83,48 @@ static void rasp_task(void *pv) {
 // CORE 0 - ultrasonic_task (priority 1)
 // ─────────────────────────────────────────
 static void ultrasonic_task(void *pv) {
-    us_data_t data;
+    us_data_t buf[3];
+    int idx = 0;
+
+    for (int i = 0; i < 3; i++) ultrasonic_read_all(&buf[i]);
+
     while (1) {
-        ultrasonic_read_all(&data);
-        g_us_data = data;
-        vTaskDelay(pdMS_TO_TICKS(20)); // 20Hz
+        ultrasonic_read_all(&buf[idx]);
+        idx = (idx + 1) % 3;
+
+        us_data_t filtered;
+        for (int i = 0; i < ULTRASONIC_COUNT; i++) {
+            int valid_count = 0;
+            float vals[3];
+            for (int j = 0; j < 3; j++) {
+                if (buf[j].valid[i]) vals[valid_count++] = buf[j].distance_cm[i];
+            }
+
+            if (valid_count == 0) {
+                filtered.valid[i] = false;
+                filtered.distance_cm[i] = -1.0f;
+            } else if (valid_count == 1) {
+                filtered.valid[i] = true;
+                filtered.distance_cm[i] = vals[0];
+            } else if (valid_count == 2) {
+                filtered.valid[i] = true;
+                filtered.distance_cm[i] = (vals[0] + vals[1]) / 2.0f;
+            } else {
+                if (vals[0] > vals[1]) { float t = vals[0]; vals[0] = vals[1]; vals[1] = t; }
+                if (vals[1] > vals[2]) { float t = vals[1]; vals[1] = vals[2]; vals[2] = t; }
+                if (vals[0] > vals[1]) { float t = vals[0]; vals[0] = vals[1]; vals[1] = t; }
+                filtered.valid[i] = true;
+                filtered.distance_cm[i] = vals[1];
+            }
+        }
+
+        if (xSemaphoreTake(g_us_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            g_us_data = filtered;
+            xSemaphoreGive(g_us_mutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
-
 // ─────────────────────────────────────────
 // CORE 0 - led_task (priority 2)
 // ─────────────────────────────────────────
@@ -220,32 +256,43 @@ static void control_task(void *pv) {
         static bool s_obstacle = false;
         static int64_t s_last_update = 0;
         static int obstacle_count = 0;
-        if (t_now - s_last_update > 200000LL) {
+        static int clear_count = 0;
+        static bool s_front_blocked = false;
+        static bool s_back_blocked  = false;
+        static bool s_left_blocked  = false;
+        static bool s_right_blocked = false;
+
+        // Snapshot an toàn — tránh race condition dual-core
+        us_data_t us_snap = {0};
+        if (xSemaphoreTake(g_us_mutex, 0) == pdTRUE) {
+            us_snap = g_us_data;
+            xSemaphoreGive(g_us_mutex);
+        }
+
+        if (t_now - s_last_update > 50000LL) {
             bool any_obstacle = false;
-            for (int i = 0; i < ULTRASONIC_COUNT; i++) {
-                if (g_us_data.valid[i] && g_us_data.distance_cm[i] < OBSTACLE_CM) {
-                    any_obstacle = true;
-                    break;
-                }
-            }
-            bool all_clear = true;
-            for (int i = 0; i < ULTRASONIC_COUNT; i++) {
-                if (!g_us_data.valid[i] || g_us_data.distance_cm[i] < OBSTACLE_CM) {
-                    all_clear = false;
-                    break;
-                }
-            }
+            bool all_clear    = true;
+
+            s_front_blocked = us_snap.valid[US_FRONT] && us_snap.distance_cm[US_FRONT] < OBSTACLE_CM;
+            s_back_blocked  = us_snap.valid[US_BACK]  && us_snap.distance_cm[US_BACK]  < OBSTACLE_CM;
+            s_left_blocked  = us_snap.valid[US_LEFT]  && us_snap.distance_cm[US_LEFT]  < OBSTACLE_CM;
+            s_right_blocked = us_snap.valid[US_RIGHT] && us_snap.distance_cm[US_RIGHT] < OBSTACLE_CM;
+
+            any_obstacle = s_front_blocked || s_back_blocked || s_left_blocked || s_right_blocked;
+            all_clear    = !any_obstacle;
+
             if (any_obstacle) {
+                clear_count = 0;
                 obstacle_count++;
-                if (obstacle_count >= 3) s_obstacle = true;
+                if (obstacle_count >= 8) s_obstacle = true;
             } else {
                 obstacle_count = 0;
-                if (all_clear) s_obstacle = false;
+                clear_count++;
+                if (clear_count >= 10 && all_clear) s_obstacle = false;
             }
             s_last_update = t_now;
         }
         g_emergency_stop = s_obstacle;
-
 
         // ── 5. Xác định mode ─────────────────────────────────────────────────
         bool swc_manual = has_rc && (rc.channel[CH_SWC] > 1700);
@@ -260,15 +307,8 @@ static void control_task(void *pv) {
             g_mode = MODE_WAITING;
         }
 
-        // // ── 6. Motor off → dừng hết ──────────────────────────────────────────
-        // if (!g_motor_enabled) {
-        //     motor_stop_all();
-        //     rasp_uart_send_status(0, 0, 0);
-        //     continue;
-        // }
-
-        // ── 6. Motor off hoặc emergency → dừng hết ───────────────────────────
-        if (!g_motor_enabled) {
+        // // ── 6. Motor off
+          if (!g_motor_enabled) {
             motor_stop_all();
             rasp_uart_send_status(0, 0, 0);
             continue;
@@ -300,24 +340,6 @@ static void control_task(void *pv) {
             break;
         }
 
-        // ── 7b. Emergency — clamp theo hướng obstacle ─────────────────────────
-        if (g_emergency_stop) {
-            pid_reset(&g_pid);
-            bool front_clear = g_us_data.valid[US_FRONT] && g_us_data.distance_cm[US_FRONT] >= OBSTACLE_CM;
-            bool back_clear  = g_us_data.valid[US_BACK]  && g_us_data.distance_cm[US_BACK]  >= OBSTACLE_CM;
-            bool left_clear  = g_us_data.valid[US_LEFT]  && g_us_data.distance_cm[US_LEFT]  >= OBSTACLE_CM;
-            bool right_clear = g_us_data.valid[US_RIGHT] && g_us_data.distance_cm[US_RIGHT] >= OBSTACLE_CM;
-
-            if (!front_clear && vel.vx > 0) vel.vx = 0;
-            if (!back_clear  && vel.vx < 0) vel.vx = 0;
-            if (!left_clear  && vel.vy > 0) vel.vy = 0;
-            if (!right_clear && vel.vy < 0) vel.vy = 0;
-        }
-
-        ESP_LOGW(TAG, "emg=%d vx=%.2f us_front=%.1f", 
-        g_emergency_stop, vel.vx, 
-        g_us_data.valid[US_FRONT] ? g_us_data.distance_cm[US_FRONT] : -1.0f);
-
         // ── 8. Forward kinematics → actual velocity ───────────────────────────
         wheel_velocity_t enc_wheels = {
             .fl = g_enc_rpm[ENC_FL] * 2.0f * 3.14159f / 60.0f,
@@ -327,17 +349,16 @@ static void control_task(void *pv) {
         };
         agv_velocity_t actual_vel = kinematics_forward(enc_wheels);
 
-        // ── 9. Controller ─────────────────────────────────────────────────────
+        // ── 9. Controller + obstacle clamp ────────────────────────────────────
         agv_velocity_t ctrl_out = {0};
-#if CTRL_MODE == CTRL_PID
         ctrl_out.vx = vel.vx + pid_update_vx(&g_pid, vel.vx, actual_vel.vx, dt_actual);
         ctrl_out.vy = vel.vy + pid_update_vy(&g_pid, vel.vy, actual_vel.vy, dt_actual);
         ctrl_out.wz = vel.wz + pid_update_wz(&g_pid, vel.wz, actual_vel.wz, dt_actual);
-#elif CTRL_MODE == CTRL_ADRC
-        ctrl_out.vx = vel.vx + adrc_update_vx(&g_adrc, vel.vx, actual_vel.vx, dt_actual);
-        ctrl_out.vy = vel.vy + adrc_update_vy(&g_adrc, vel.vy, actual_vel.vy, dt_actual);
-        ctrl_out.wz = vel.wz + adrc_update_wz(&g_adrc, vel.wz, actual_vel.wz, dt_actual);
-#endif
+
+        if (s_front_blocked && ctrl_out.vx > 0) { ctrl_out.vx = 0; pid_reset_vx(&g_pid); }
+        if (s_back_blocked  && ctrl_out.vx < 0) { ctrl_out.vx = 0; pid_reset_vx(&g_pid); }
+        if (s_left_blocked  && ctrl_out.vy > 0) { ctrl_out.vy = 0; pid_reset_vy(&g_pid); }
+        if (s_right_blocked && ctrl_out.vy < 0) { ctrl_out.vy = 0; pid_reset_vy(&g_pid); }
 
         // ── 10. Inverse kinematics → PWM ─────────────────────────────────────
         wheel_velocity_t wheels = kinematics_inverse(ctrl_out);
@@ -427,6 +448,9 @@ void app_main(void) {
 
     // Motor OFF khi boot — SWA mới enable
     motor_enable(false);
+
+    // Khởi tạo mutex bảo vệ g_us_data
+    g_us_mutex = xSemaphoreCreateMutex();
 
     // Boot xong — 2 tiếng, LED trắng (WAITING)
     buzzer_beep(2700, 100);
