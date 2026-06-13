@@ -172,3 +172,9 @@ void buzzer_off(void) {
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_LEDC_CH, 0);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZZER_LEDC_CH);
 }
+
+void buzzer_on(uint32_t freq_hz) {
+    ledc_set_freq(LEDC_LOW_SPEED_MODE, BUZZER_LEDC_TIMER, freq_hz);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_LEDC_CH, 512);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZZER_LEDC_CH);
+}

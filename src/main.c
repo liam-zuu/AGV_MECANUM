@@ -36,6 +36,7 @@ static const char *TAG = "MAIN";
 #define CH_VRA  5   // channel 6 — speed scale
 #define CH_SWA  6   // channel 7 — motor enable
 #define CH_SWD  7   // channel 8 — buzzer
+#define CH_SWB  8   // channel 9 — tắt/bật ultrasonic obstacle
 
 // ─── Threshold ────────────────────────────────────────────────────────────────
 #define OBSTACLE_CM     15.0f      // tăng lên 15cm — US-015 không ổn định dưới 10cm
@@ -64,6 +65,8 @@ static SemaphoreHandle_t        g_us_mutex;        // bảo vệ g_us_data khỏ
 
 static pid_controller_t g_pid;
 // static adrc_controller_t g_adrc;
+
+static volatile bool g_obstacle_enabled = true;  // mặc định bật
 
 // ─────────────────────────────────────────
 // CORE 0 - rasp_task (priority 3)
@@ -135,19 +138,24 @@ static void led_task(void *pv) {
         bool emg = g_emergency_stop;
 
         if (emg) {
+            static int64_t s_buzz_last = 0;
+            static bool s_buzz_on = false;
+            int64_t now = esp_timer_get_time();
+            if (now - s_buzz_last > 400000LL) {
+                s_buzz_on = !s_buzz_on;
+                s_buzz_last = now;
+                if (s_buzz_on) buzzer_on(2700);
+                else           buzzer_off();
+            }
             led_set_color(COLOR_RED);
-            buzzer_beep(2700, 100);
-            vTaskDelay(pdMS_TO_TICKS(150));
-            led_set_color(COLOR_OFF);
-            buzzer_off();
-            vTaskDelay(pdMS_TO_TICKS(150));
+            vTaskDelay(pdMS_TO_TICKS(30));
             continue;
         }
 
         switch (mode) {
         case MODE_WAITING:
             led_set_color(COLOR_WHITE);
-            buzzer_beep(2700, 50);
+            buzzer_beep(2700, 100);
             vTaskDelay(pdMS_TO_TICKS(500));
             led_set_color(COLOR_OFF);
             buzzer_off();
@@ -249,8 +257,21 @@ static void control_task(void *pv) {
             motor_enable(swa_on);
         }
 
-        // ── 3. SWD — buzzer (TODO: task riêng) ───────────────────────────────
-        
+        // ── 2b. SWB — tắt/bật obstacle detection (chỉ hoạt động ở MANUAL) ───
+        if (has_rc && g_mode == MODE_MANUAL) {
+            g_obstacle_enabled = (rc.channel[CH_SWB] < 1500);
+        } else {
+            g_obstacle_enabled = true;  // AUTO mode luôn bật obstacle
+        }
+
+        // ── 3. SWD — buzzer ───────────────────────────────────────────────────
+        if (!g_emergency_stop) {
+            if (has_rc && (rc.channel[CH_SWD] > 1500)) {
+                buzzer_on(2700);
+            } else {
+                buzzer_off();
+            }
+        }
 
         // ── 4. Emergency stop — ultrasonic ────────────────────────────────────
         static bool s_obstacle = false;
@@ -262,37 +283,48 @@ static void control_task(void *pv) {
         static bool s_left_blocked  = false;
         static bool s_right_blocked = false;
 
-        // Snapshot an toàn — tránh race condition dual-core
-        us_data_t us_snap = {0};
-        if (xSemaphoreTake(g_us_mutex, 0) == pdTRUE) {
-            us_snap = g_us_data;
-            xSemaphoreGive(g_us_mutex);
-        }
-
-        if (t_now - s_last_update > 50000LL) {
-            bool any_obstacle = false;
-            bool all_clear    = true;
-
-            s_front_blocked = us_snap.valid[US_FRONT] && us_snap.distance_cm[US_FRONT] < OBSTACLE_CM;
-            s_back_blocked  = us_snap.valid[US_BACK]  && us_snap.distance_cm[US_BACK]  < OBSTACLE_CM;
-            s_left_blocked  = us_snap.valid[US_LEFT]  && us_snap.distance_cm[US_LEFT]  < OBSTACLE_CM;
-            s_right_blocked = us_snap.valid[US_RIGHT] && us_snap.distance_cm[US_RIGHT] < OBSTACLE_CM;
-
-            any_obstacle = s_front_blocked || s_back_blocked || s_left_blocked || s_right_blocked;
-            all_clear    = !any_obstacle;
-
-            if (any_obstacle) {
-                clear_count = 0;
-                obstacle_count++;
-                if (obstacle_count >= 8) s_obstacle = true;
-            } else {
-                obstacle_count = 0;
-                clear_count++;
-                if (clear_count >= 10 && all_clear) s_obstacle = false;
+        if (!g_obstacle_enabled) {
+            s_obstacle      = false;
+            obstacle_count  = 0;
+            clear_count     = 0;
+            s_front_blocked = false;
+            s_back_blocked  = false;
+            s_left_blocked  = false;
+            s_right_blocked = false;
+        } else {
+            // Snapshot an toàn — tránh race condition dual-core
+            us_data_t us_snap = {0};
+            if (xSemaphoreTake(g_us_mutex, 0) == pdTRUE) {
+                us_snap = g_us_data;
+                xSemaphoreGive(g_us_mutex);
             }
-            s_last_update = t_now;
+
+            if (t_now - s_last_update > 50000LL) {
+                bool any_obstacle = false;
+                bool all_clear    = true;
+
+                s_front_blocked = us_snap.valid[US_FRONT] && us_snap.distance_cm[US_FRONT] < OBSTACLE_CM;
+                s_back_blocked  = us_snap.valid[US_BACK]  && us_snap.distance_cm[US_BACK]  < OBSTACLE_CM;
+                s_left_blocked  = us_snap.valid[US_LEFT]  && us_snap.distance_cm[US_LEFT]  < OBSTACLE_CM;
+                s_right_blocked = us_snap.valid[US_RIGHT] && us_snap.distance_cm[US_RIGHT] < OBSTACLE_CM;
+
+                any_obstacle = s_front_blocked || s_back_blocked || s_left_blocked || s_right_blocked;
+                all_clear    = !any_obstacle;
+
+                if (any_obstacle) {
+                    clear_count = 0;
+                    obstacle_count++;
+                    if (obstacle_count >= 8) s_obstacle = true;
+                } else {
+                    obstacle_count = 0;
+                    clear_count++;
+                    if (clear_count >= 10 && all_clear) s_obstacle = false;
+                }
+                s_last_update = t_now;
+            }
         }
         g_emergency_stop = s_obstacle;
+
 
         // ── 5. Xác định mode ─────────────────────────────────────────────────
         bool swc_manual = has_rc && (rc.channel[CH_SWC] > 1700);

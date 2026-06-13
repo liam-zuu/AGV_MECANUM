@@ -34,5 +34,6 @@ void led_set_color(rgb_color_t color);
 // Buzzer
 void buzzer_beep(uint32_t freq_hz, uint32_t duration_ms);
 void buzzer_off(void);
+void buzzer_on(uint32_t freq_hz);
 
 #endif
