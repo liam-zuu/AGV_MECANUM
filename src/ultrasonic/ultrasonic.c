@@ -5,10 +5,17 @@
 
 static const char *TAG = "ULTRASONIC";
 
+// static const int echo_pins[ULTRASONIC_COUNT] = {
+//     ULTRASONIC_ECHO_0,
+//     ULTRASONIC_ECHO_1,
+//     ULTRASONIC_ECHO_2,
+//     ULTRASONIC_ECHO_3,
+// };
+
 static const int echo_pins[ULTRASONIC_COUNT] = {
+    ULTRASONIC_ECHO_2,
     ULTRASONIC_ECHO_0,
     ULTRASONIC_ECHO_1,
-    ULTRASONIC_ECHO_2,
     ULTRASONIC_ECHO_3,
 };
 

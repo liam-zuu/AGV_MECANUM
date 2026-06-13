@@ -35,7 +35,7 @@ static volatile us_data_t       g_us_data      = {0};
 
 // Controllers — chỉ dùng một, chọn bằng CTRL_MODE
 static pid_controller_t  g_pid;
-static adrc_controller_t g_adrc;
+// static adrc_controller_t g_adrc;
 
 // ─────────────────────────────────────────
 // CORE 0 - rasp_task (priority 3)

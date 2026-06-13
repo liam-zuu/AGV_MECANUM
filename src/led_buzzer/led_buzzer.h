@@ -7,7 +7,7 @@
 
 // GPIO
 #define RGB_LED_GPIO        48
-#define BUZZER_GPIO         1
+#define BUZZER_GPIO         17
 
 // LEDC cho buzzer
 #define BUZZER_LEDC_TIMER   LEDC_TIMER_1

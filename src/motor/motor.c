@@ -80,15 +80,14 @@ void motor_init(void) {
 
     // EN chung
     gpio_config_t en_cfg = {
-        .pin_bit_mask = (1ULL << GPIO_EN_LEFT) | (1ULL << GPIO_EN_RIGHT),
+        .pin_bit_mask = (1ULL << GPIO_EN),
         .mode         = GPIO_MODE_OUTPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
     gpio_config(&en_cfg);
-    gpio_set_level(GPIO_EN_LEFT, 0);
-    gpio_set_level(GPIO_EN_RIGHT, 0);
+    gpio_set_level(GPIO_EN, 0);
 
     ESP_LOGI(TAG, "Motor init done (MCPWM)");
 }
@@ -117,7 +116,6 @@ void motor_stop_all(void) {
 }
 
 void motor_enable(bool en) {
-    gpio_set_level(GPIO_EN_LEFT,  en ? 1 : 0);
-    gpio_set_level(GPIO_EN_RIGHT, en ? 1 : 0);
+    gpio_set_level(GPIO_EN, en ? 1 : 0);
     ESP_LOGI(TAG, "Motor %s", en ? "enabled" : "disabled");
 }

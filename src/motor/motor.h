@@ -11,8 +11,7 @@
 #define PWM_MAX         1000
 
 // EN chung
-#define GPIO_EN_LEFT    17   // FL + RL
-#define GPIO_EN_RIGHT   45   // FR + RR
+#define GPIO_EN         45
 
 // Motor pins (RPWM, LPWM)
 #define FL_RPWM         8
