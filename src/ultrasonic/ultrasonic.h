@@ -12,7 +12,7 @@
 #define ULTRASONIC_ECHO_3   38
 
 #define ULTRASONIC_COUNT    4
-#define ULTRASONIC_TIMEOUT_US   25000   // 25ms ~ 4m max range
+#define ULTRASONIC_TIMEOUT_US   12000   // 25ms ~ 4m max range
 #define ULTRASONIC_MIN_CM       2
 #define ULTRASONIC_MAX_CM       400
 

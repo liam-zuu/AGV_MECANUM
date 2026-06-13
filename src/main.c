@@ -2,6 +2,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include <string.h>
 
 #include "motor/motor.h"
 #include "encoder/encoder.h"
@@ -21,20 +22,45 @@
 static const char *TAG = "MAIN";
 
 // ─── Controller mode ──────────────────────────────────────────────────────────
-// Đổi để chọn controller: CTRL_PID hoặc CTRL_ADRC
 #define CTRL_PID   0
 #define CTRL_ADRC  1
 #define CTRL_MODE  CTRL_PID   // ← đổi ở đây
 
-// Shared data
+// ─── IBus channel (tay cầm đếm từ 1, index = channel - 1) ───────────────────
+#define CH_LX   0   // channel 1 — left stick X  → vy
+#define CH_LY   1   // channel 2 — left stick Y  → vx
+#define CH_RY   2   // channel 3 — right stick Y (unused)
+#define CH_RX   3   // channel 4 — right stick X → wz
+#define CH_SWC  4   // channel 5 — nấc 3 (>1700) → MANUAL
+#define CH_VRA  5   // channel 6 — speed scale
+#define CH_SWA  6   // channel 7 — motor enable
+#define CH_SWD  7   // channel 8 — buzzer
+
+// ─── Threshold ────────────────────────────────────────────────────────────────
+#define OBSTACLE_CM     25.0f
+#define UART_TIMEOUT_US 200000LL   // 200ms tính bằng µs
+
+// ─── System mode ─────────────────────────────────────────────────────────────
+typedef enum {
+    MODE_WAITING = 0,
+    MODE_MANUAL,
+    MODE_AUTO_UART,
+    MODE_AUTO_WIFI,
+} system_mode_t;
+
+// ─── Shared state ─────────────────────────────────────────────────────────────
+static volatile system_mode_t g_mode           = MODE_WAITING;
+static volatile bool          g_emergency_stop = false;
+static volatile bool          g_motor_enabled  = false;
+static volatile int64_t       g_last_uart_us   = 0;
+
 static volatile rasp_setpoint_t g_setpoint     = {0};
 static volatile float           g_enc_rpm[4]   = {0};
 static volatile int32_t         g_enc_count[4] = {0};
 static volatile imu_data_t      g_imu_data     = {0};
 static volatile us_data_t       g_us_data      = {0};
 
-// Controllers — chỉ dùng một, chọn bằng CTRL_MODE
-static pid_controller_t  g_pid;
+static pid_controller_t g_pid;
 // static adrc_controller_t g_adrc;
 
 // ─────────────────────────────────────────
@@ -44,28 +70,91 @@ static void rasp_task(void *pv) {
     rasp_setpoint_t sp;
     while (1) {
         if (rasp_uart_read_setpoint(&sp)) {
-            g_setpoint = sp;
+            g_setpoint     = sp;
+            g_last_uart_us = esp_timer_get_time();
         }
-        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 // ─────────────────────────────────────────
-// CORE 0 - ultrasonic_task (priority 2)
+// CORE 0 - ultrasonic_task (priority 1)
 // ─────────────────────────────────────────
 static void ultrasonic_task(void *pv) {
     us_data_t data;
     while (1) {
         ultrasonic_read_all(&data);
         g_us_data = data;
-        vTaskDelay(pdMS_TO_TICKS(50)); // 20Hz
+        vTaskDelay(pdMS_TO_TICKS(20)); // 20Hz
     }
 }
 
 // ─────────────────────────────────────────
-// CORE 0 - logger_task (priority 1)
+// CORE 0 - led_task (priority 2)
 // ─────────────────────────────────────────
-// định nghĩa trong logger.c
+static void led_task(void *pv) {
+    float hue = 0.0f;
+    while (1) {
+        system_mode_t mode = g_mode;
+        bool emg = g_emergency_stop;
+
+        if (emg) {
+            led_set_color(COLOR_RED);
+            buzzer_beep(2700, 100);
+            vTaskDelay(pdMS_TO_TICKS(150));
+            led_set_color(COLOR_OFF);
+            buzzer_off();
+            vTaskDelay(pdMS_TO_TICKS(150));
+            continue;
+        }
+
+        switch (mode) {
+        case MODE_WAITING:
+            led_set_color(COLOR_WHITE);
+            buzzer_beep(2700, 50);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            led_set_color(COLOR_OFF);
+            buzzer_off();
+            vTaskDelay(pdMS_TO_TICKS(500));
+            break;
+
+        case MODE_MANUAL: {
+            float h = hue / 60.0f;
+            int   i = (int)h;
+            float f = h - i;
+            float q = 1.0f - f;
+            uint8_t r = 0, g = 0, b = 0;
+            switch (i % 6) {
+                case 0: r=255; g=(uint8_t)(255*f); b=0;           break;
+                case 1: r=(uint8_t)(255*q); g=255; b=0;           break;
+                case 2: r=0;   g=255; b=(uint8_t)(255*f);         break;
+                case 3: r=0;   g=(uint8_t)(255*q); b=255;         break;
+                case 4: r=(uint8_t)(255*f); g=0;   b=255;         break;
+                case 5: r=255; g=0;   b=(uint8_t)(255*q);         break;
+            }
+            led_set_color((rgb_color_t){r, g, b});
+            hue += 3.0f;
+            if (hue >= 360.0f) hue = 0.0f;
+            vTaskDelay(pdMS_TO_TICKS(30));
+            break;
+        }
+
+        case MODE_AUTO_UART:
+            led_set_color((rgb_color_t){0, 100, 255});
+            vTaskDelay(pdMS_TO_TICKS(100));
+            break;
+
+        case MODE_AUTO_WIFI:
+            led_set_color((rgb_color_t){180, 0, 255});
+            vTaskDelay(pdMS_TO_TICKS(100));
+            break;
+        }
+    }
+}
+
+// ─────────────────────────────────────────
+// CORE 0 - logger_task: định nghĩa trong logger.c
+// ─────────────────────────────────────────
 
 // ─────────────────────────────────────────
 // CORE 1 - encoder_task (priority 6)
@@ -76,7 +165,7 @@ static void encoder_task(void *pv) {
             g_enc_rpm[i]   = encoder_get_rpm((enc_id_t)i);
             g_enc_count[i] = encoder_get_count((enc_id_t)i);
         }
-        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
@@ -89,7 +178,7 @@ static void imu_task(void *pv) {
         if (imu_get(&data)) {
             g_imu_data = data;
         }
-        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
@@ -97,41 +186,139 @@ static void imu_task(void *pv) {
 // CORE 1 - control_task (priority 5)
 // ─────────────────────────────────────────
 static void control_task(void *pv) {
-    const float dt = 0.01f;   // 100Hz → 10ms
-    int64_t t_prev = esp_timer_get_time();
+    const float dt  = 0.01f;
+    int64_t t_prev  = esp_timer_get_time();
+    bool    swa_prev   = false;
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
 
-        // dt thực tế — tránh spike lần đầu
-        int64_t t_now = esp_timer_get_time();
+        int64_t t_now   = esp_timer_get_time();
         float dt_actual = (t_now - t_prev) * 1e-6f;
         t_prev = t_now;
         if (dt_actual <= 0.0f || dt_actual > 0.1f) dt_actual = dt;
 
-        // 1. Đọc setpoint — ưu tiên RPi5, fallback IBus
-        agv_velocity_t vel = {0};
+        // ── 1. Đọc IBus ──────────────────────────────────────────────────────
+        ibus_data_t rc;
+        bool has_rc = ibus_get(&rc);
 
-        if (g_setpoint.valid) {
+        // ── 2. SWA — motor enable/disable ────────────────────────────────────
+        bool swa_on = has_rc && (rc.channel[CH_SWA] > 1500);
+        if (swa_on != swa_prev) {
+            g_emergency_stop = false;
+            swa_prev         = swa_on;
+        }
+        if (g_motor_enabled != swa_on) {
+            g_motor_enabled = swa_on;
+            motor_enable(swa_on);
+        }
+
+        // ── 3. SWD — buzzer (TODO: task riêng) ───────────────────────────────
+        
+
+        // ── 4. Emergency stop — ultrasonic ────────────────────────────────────
+        static bool s_obstacle = false;
+        static int64_t s_last_update = 0;
+        static int obstacle_count = 0;
+        if (t_now - s_last_update > 200000LL) {
+            bool any_obstacle = false;
+            for (int i = 0; i < ULTRASONIC_COUNT; i++) {
+                if (g_us_data.valid[i] && g_us_data.distance_cm[i] < OBSTACLE_CM) {
+                    any_obstacle = true;
+                    break;
+                }
+            }
+            bool all_clear = true;
+            for (int i = 0; i < ULTRASONIC_COUNT; i++) {
+                if (!g_us_data.valid[i] || g_us_data.distance_cm[i] < OBSTACLE_CM) {
+                    all_clear = false;
+                    break;
+                }
+            }
+            if (any_obstacle) {
+                obstacle_count++;
+                if (obstacle_count >= 3) s_obstacle = true;
+            } else {
+                obstacle_count = 0;
+                if (all_clear) s_obstacle = false;
+            }
+            s_last_update = t_now;
+        }
+        g_emergency_stop = s_obstacle;
+
+
+        // ── 5. Xác định mode ─────────────────────────────────────────────────
+        bool swc_manual = has_rc && (rc.channel[CH_SWC] > 1700);
+        bool uart_fresh = (g_last_uart_us > 0) &&
+                          ((t_now - g_last_uart_us) < UART_TIMEOUT_US);
+
+        if (swc_manual) {
+            g_mode = MODE_MANUAL;
+        } else if (uart_fresh) {
+            g_mode = MODE_AUTO_UART;
+        } else {
+            g_mode = MODE_WAITING;
+        }
+
+        // // ── 6. Motor off → dừng hết ──────────────────────────────────────────
+        // if (!g_motor_enabled) {
+        //     motor_stop_all();
+        //     rasp_uart_send_status(0, 0, 0);
+        //     continue;
+        // }
+
+        // ── 6. Motor off hoặc emergency → dừng hết ───────────────────────────
+        if (!g_motor_enabled) {
+            motor_stop_all();
+            rasp_uart_send_status(0, 0, 0);
+            continue;
+        }
+
+        // ── 7. Setpoint theo mode ─────────────────────────────────────────────
+        agv_velocity_t vel = {0};
+        switch (g_mode) {
+        case MODE_MANUAL:
+            if (has_rc) {
+                float speed_scale = (float)(rc.channel[CH_VRA] - 1000) / 1000.0f;
+                if (speed_scale < 0.0f) speed_scale = 0.0f;
+                if (speed_scale > 1.0f) speed_scale = 1.0f;
+                vel.vx =  ibus_channel_normalized(&rc, CH_LY) / 500.0f * speed_scale;
+                vel.vy = -ibus_channel_normalized(&rc, CH_LX) / 500.0f * speed_scale;
+                vel.wz = -ibus_channel_normalized(&rc, CH_RX) / 500.0f * speed_scale;
+            }
+            break;
+        case MODE_AUTO_UART:
             vel.vx = g_setpoint.vx;
             vel.vy = g_setpoint.vy;
             vel.wz = g_setpoint.wz;
-        } else {
-            
-            ibus_data_t rc;
-                if (ibus_get(&rc)) {
-                    // VRA = channel 5, range [1000, 2000] → scale [0.0, 1.0]
-                    float speed_scale = (float)(rc.channel[5] - 1000) / 1000.0f;
-                    if (speed_scale < 0.0f) speed_scale = 0.0f;
-                    if (speed_scale > 1.0f) speed_scale = 1.0f;
-
-                    vel.vx = ibus_channel_normalized(&rc, 1) / 500.0f * speed_scale;
-                    vel.vy = -ibus_channel_normalized(&rc, 0) / 500.0f * speed_scale;
-                    vel.wz = -ibus_channel_normalized(&rc, 3) / 500.0f * speed_scale;
-                }
+            break;
+        case MODE_AUTO_WIFI:
+            // TODO: WiFi UDP buffer
+            break;
+        case MODE_WAITING:
+        default:
+            break;
         }
 
-        // 2. Forward kinematics từ encoder → actual velocity
+        // ── 7b. Emergency — clamp theo hướng obstacle ─────────────────────────
+        if (g_emergency_stop) {
+            pid_reset(&g_pid);
+            bool front_clear = g_us_data.valid[US_FRONT] && g_us_data.distance_cm[US_FRONT] >= OBSTACLE_CM;
+            bool back_clear  = g_us_data.valid[US_BACK]  && g_us_data.distance_cm[US_BACK]  >= OBSTACLE_CM;
+            bool left_clear  = g_us_data.valid[US_LEFT]  && g_us_data.distance_cm[US_LEFT]  >= OBSTACLE_CM;
+            bool right_clear = g_us_data.valid[US_RIGHT] && g_us_data.distance_cm[US_RIGHT] >= OBSTACLE_CM;
+
+            if (!front_clear && vel.vx > 0) vel.vx = 0;
+            if (!back_clear  && vel.vx < 0) vel.vx = 0;
+            if (!left_clear  && vel.vy > 0) vel.vy = 0;
+            if (!right_clear && vel.vy < 0) vel.vy = 0;
+        }
+
+        ESP_LOGW(TAG, "emg=%d vx=%.2f us_front=%.1f", 
+        g_emergency_stop, vel.vx, 
+        g_us_data.valid[US_FRONT] ? g_us_data.distance_cm[US_FRONT] : -1.0f);
+
+        // ── 8. Forward kinematics → actual velocity ───────────────────────────
         wheel_velocity_t enc_wheels = {
             .fl = g_enc_rpm[ENC_FL] * 2.0f * 3.14159f / 60.0f,
             .fr = g_enc_rpm[ENC_FR] * 2.0f * 3.14159f / 60.0f,
@@ -140,11 +327,8 @@ static void control_task(void *pv) {
         };
         agv_velocity_t actual_vel = kinematics_forward(enc_wheels);
 
-        // 3. Controller — closed-loop velocity control
-        //    Input:  vel (setpoint), actual_vel (feedback từ encoder)
-        //    Output: corrected velocity → inverse kinematics → PWM
+        // ── 9. Controller ─────────────────────────────────────────────────────
         agv_velocity_t ctrl_out = {0};
-
 #if CTRL_MODE == CTRL_PID
         ctrl_out.vx = vel.vx + pid_update_vx(&g_pid, vel.vx, actual_vel.vx, dt_actual);
         ctrl_out.vy = vel.vy + pid_update_vy(&g_pid, vel.vy, actual_vel.vy, dt_actual);
@@ -155,9 +339,8 @@ static void control_task(void *pv) {
         ctrl_out.wz = vel.wz + adrc_update_wz(&g_adrc, vel.wz, actual_vel.wz, dt_actual);
 #endif
 
-        // 4. Inverse kinematics → wheel speed → PWM
+        // ── 10. Inverse kinematics → PWM ─────────────────────────────────────
         wheel_velocity_t wheels = kinematics_inverse(ctrl_out);
-
         int pwm_fl = kinematics_radps_to_pwm(wheels.fl);
         int pwm_fr = kinematics_radps_to_pwm(wheels.fr);
         int pwm_rl = kinematics_radps_to_pwm(wheels.rl);
@@ -168,11 +351,11 @@ static void control_task(void *pv) {
         motor_set(MOTOR_RL, pwm_rl);
         motor_set(MOTOR_RR, pwm_rr);
 
-        // 5. Gửi status về RPi5
+        // ── 11. Gửi status về H7 ─────────────────────────────────────────────
         rasp_uart_send_status(actual_vel.vx, actual_vel.vy, actual_vel.wz);
 
-        // 6. Push log
-        log_data_t log = {
+        // ── 12. Push log ──────────────────────────────────────────────────────
+        log_data_t logdata = {
             .timestamp_us = t_now,
             .fl_count = g_enc_count[ENC_FL],
             .fr_count = g_enc_count[ENC_FR],
@@ -202,7 +385,7 @@ static void control_task(void *pv) {
             .pitch    = g_imu_data.pitch,
             .roll     = g_imu_data.roll,
         };
-        logger_push(&log);
+        logger_push(&logdata);
     }
 }
 
@@ -218,9 +401,10 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "AGV starting...");
 
-    // Status LED: khởi động
+    // LED + buzzer trước imu_init (GPIO1 share RST BNO085)
     led_buzzer_init();
     led_set_color(COLOR_YELLOW);
+    buzzer_beep(2700, 100);
 
     // Init peripherals
     wifi_init();
@@ -241,21 +425,26 @@ void app_main(void) {
     ESP_LOGI(TAG, "Controller: ADRC");
 #endif
 
-    // Enable motor
-    motor_enable(true);
+    // Motor OFF khi boot — SWA mới enable
+    motor_enable(false);
 
-    // Status LED: ready
-    led_set_color(COLOR_GREEN);
-    buzzer_beep(2700, 200);
+    // Boot xong — 2 tiếng, LED trắng (WAITING)
+    buzzer_beep(2700, 100);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    buzzer_beep(2700, 100);
+    led_set_color(COLOR_WHITE);
 
-    // Tạo tasks
-    xTaskCreatePinnedToCore(ibus_task,        "ibus",       4096, NULL, 4, NULL, 0);
-    xTaskCreatePinnedToCore(rasp_task,        "rasp",       4096, NULL, 3, NULL, 0);
-    xTaskCreatePinnedToCore(ultrasonic_task,  "ultrasonic", 4096, NULL, 2, NULL, 0);
-    xTaskCreatePinnedToCore(logger_task,      "logger",     4096, NULL, 1, NULL, 0);
-    xTaskCreatePinnedToCore(encoder_task,     "encoder",    4096, NULL, 6, NULL, 1);
-    xTaskCreatePinnedToCore(imu_task,         "imu",        4096, NULL, 6, NULL, 1);
-    xTaskCreatePinnedToCore(control_task,     "control",    4096, NULL, 5, NULL, 1);
+    ESP_LOGI(TAG, "Boot done — WAITING");
+
+    // Tasks
+    xTaskCreatePinnedToCore(ibus_task,       "ibus",       4096, NULL, 4, NULL, 0);
+    xTaskCreatePinnedToCore(rasp_task,       "rasp",       4096, NULL, 3, NULL, 0);
+    xTaskCreatePinnedToCore(led_task,        "led",        4096, NULL, 2, NULL, 0);
+    xTaskCreatePinnedToCore(ultrasonic_task, "ultrasonic", 4096, NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(logger_task,     "logger",     4096, NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(encoder_task,    "encoder",    4096, NULL, 6, NULL, 1);
+    xTaskCreatePinnedToCore(imu_task,        "imu",        4096, NULL, 6, NULL, 1);
+    xTaskCreatePinnedToCore(control_task,    "control",    4096, NULL, 5, NULL, 1);
 
     ESP_LOGI(TAG, "All tasks started");
 }

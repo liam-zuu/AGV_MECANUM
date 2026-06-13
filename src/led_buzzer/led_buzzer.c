@@ -157,7 +157,7 @@ void led_set_color(rgb_color_t color) {
     uint8_t grb[3] = {color.g, color.r, color.b};
     rmt_transmit_config_t tx_cfg = {.loop_count = 0};
     rmt_transmit(rmt_chan, led_encoder, grb, sizeof(grb), &tx_cfg);
-    rmt_tx_wait_all_done(rmt_chan, pdMS_TO_TICKS(10));
+    rmt_tx_wait_all_done(rmt_chan, pdMS_TO_TICKS(100));
 }
 
 void buzzer_beep(uint32_t freq_hz, uint32_t duration_ms) {
