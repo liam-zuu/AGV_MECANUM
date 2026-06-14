@@ -261,20 +261,6 @@ static void control_task(void *pv) {
         }
 
         // ── 3. SWD — buzzer (TODO: task riêng) ───────────────────────────────
-                if (has_rc && g_mode == MODE_MANUAL) {
-            g_obstacle_enabled = (rc.channel[CH_SWB] < 1500);
-        } else {
-            g_obstacle_enabled = true;  // AUTO mode luôn bật obstacle
-        }
-        if (emg) {
-            led_set_color(COLOR_RED);
-            buzzer_beep(2700, 100);
-            vTaskDelay(pdMS_TO_TICKS(150));
-            led_set_color(COLOR_OFF);
-            buzzer_off();
-            vTaskDelay(pdMS_TO_TICKS(150));
-            continue;
-        }
 
         // ── 4. Emergency stop — ultrasonic ────────────────────────────────────
         static bool s_obstacle = false;
