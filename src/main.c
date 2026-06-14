@@ -39,7 +39,7 @@ static const char *TAG = "MAIN";
 #define CH_SWB  8   // channel 9 — tắt/bật ultrasonic obstacle
 
 // ─── Threshold ────────────────────────────────────────────────────────────────
-#define OBSTACLE_CM     15.0f      // tăng lên 15cm — US-015 không ổn định dưới 10cm
+#define OBSTACLE_CM     20.0f      // tăng lên 20cm — US-015 không ổn định dưới 10cm
 #define UART_TIMEOUT_US 200000LL   // 200ms tính bằng µs
 
 // ─── System mode ─────────────────────────────────────────────────────────────
@@ -66,7 +66,8 @@ static SemaphoreHandle_t        g_us_mutex;        // bảo vệ g_us_data khỏ
 static pid_controller_t g_pid;
 // static adrc_controller_t g_adrc;
 
-static volatile bool g_obstacle_enabled = true;  // mặc định bật
+
+static volatile bool g_obstacle_enabled = true;
 
 // ─────────────────────────────────────────
 // CORE 0 - rasp_task (priority 3)
@@ -138,24 +139,19 @@ static void led_task(void *pv) {
         bool emg = g_emergency_stop;
 
         if (emg) {
-            static int64_t s_buzz_last = 0;
-            static bool s_buzz_on = false;
-            int64_t now = esp_timer_get_time();
-            if (now - s_buzz_last > 400000LL) {
-                s_buzz_on = !s_buzz_on;
-                s_buzz_last = now;
-                if (s_buzz_on) buzzer_on(2700);
-                else           buzzer_off();
-            }
             led_set_color(COLOR_RED);
-            vTaskDelay(pdMS_TO_TICKS(30));
+            buzzer_beep(2700, 100);
+            vTaskDelay(pdMS_TO_TICKS(150));
+            led_set_color(COLOR_OFF);
+            buzzer_off();
+            vTaskDelay(pdMS_TO_TICKS(150));
             continue;
         }
 
         switch (mode) {
         case MODE_WAITING:
             led_set_color(COLOR_WHITE);
-            buzzer_beep(2700, 100);
+            buzzer_beep(2700, 50);
             vTaskDelay(pdMS_TO_TICKS(500));
             led_set_color(COLOR_OFF);
             buzzer_off();
@@ -264,13 +260,20 @@ static void control_task(void *pv) {
             g_obstacle_enabled = true;  // AUTO mode luôn bật obstacle
         }
 
-        // ── 3. SWD — buzzer ───────────────────────────────────────────────────
-        if (!g_emergency_stop) {
-            if (has_rc && (rc.channel[CH_SWD] > 1500)) {
-                buzzer_on(2700);
-            } else {
-                buzzer_off();
-            }
+        // ── 3. SWD — buzzer (TODO: task riêng) ───────────────────────────────
+                if (has_rc && g_mode == MODE_MANUAL) {
+            g_obstacle_enabled = (rc.channel[CH_SWB] < 1500);
+        } else {
+            g_obstacle_enabled = true;  // AUTO mode luôn bật obstacle
+        }
+        if (emg) {
+            led_set_color(COLOR_RED);
+            buzzer_beep(2700, 100);
+            vTaskDelay(pdMS_TO_TICKS(150));
+            led_set_color(COLOR_OFF);
+            buzzer_off();
+            vTaskDelay(pdMS_TO_TICKS(150));
+            continue;
         }
 
         // ── 4. Emergency stop — ultrasonic ────────────────────────────────────
@@ -283,60 +286,69 @@ static void control_task(void *pv) {
         static bool s_left_blocked  = false;
         static bool s_right_blocked = false;
 
-        if (!g_obstacle_enabled) {
-            s_obstacle      = false;
-            obstacle_count  = 0;
-            clear_count     = 0;
+        // Snapshot an toàn — tránh race condition dual-core
+        static us_data_t us_snap = {0}; 
+        bool us_data_fresh = false;
+
+        if (xSemaphoreTake(g_us_mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
+            us_snap = g_us_data; // Cập nhật dữ liệu mới nếu lấy được mutex
+            xSemaphoreGive(g_us_mutex);
+            us_data_fresh = true;
+        }
+
+        if (us_data_fresh && (t_now - s_last_update > 50000LL)) {
+        bool any_obstacle = false;
+        bool all_clear    = true;
+
+        // Nếu g_obstacle_enabled = false, ta ép các cờ blocked bằng false luôn
+        if (g_obstacle_enabled) {
+            s_front_blocked = us_snap.valid[US_FRONT] && us_snap.distance_cm[US_FRONT] < OBSTACLE_CM;
+            s_back_blocked  = us_snap.valid[US_BACK]  && us_snap.distance_cm[US_BACK]  < OBSTACLE_CM;
+            s_left_blocked  = us_snap.valid[US_LEFT]  && us_snap.distance_cm[US_LEFT]  < OBSTACLE_CM;
+            s_right_blocked = us_snap.valid[US_RIGHT] && us_snap.distance_cm[US_RIGHT] < OBSTACLE_CM;
+        } else {
             s_front_blocked = false;
             s_back_blocked  = false;
             s_left_blocked  = false;
             s_right_blocked = false;
+        }
+
+            any_obstacle = s_front_blocked || s_back_blocked || s_left_blocked || s_right_blocked;
+            all_clear    = !any_obstacle;
+
+        if (any_obstacle) {
+            clear_count = 0;
+            obstacle_count++;
+            if (obstacle_count >= 2) s_obstacle = true;
         } else {
-            // Snapshot an toàn — tránh race condition dual-core
-            us_data_t us_snap = {0};
-            if (xSemaphoreTake(g_us_mutex, 0) == pdTRUE) {
-                us_snap = g_us_data;
-                xSemaphoreGive(g_us_mutex);
-            }
-
-            if (t_now - s_last_update > 50000LL) {
-                bool any_obstacle = false;
-                bool all_clear    = true;
-
-                s_front_blocked = us_snap.valid[US_FRONT] && us_snap.distance_cm[US_FRONT] < OBSTACLE_CM;
-                s_back_blocked  = us_snap.valid[US_BACK]  && us_snap.distance_cm[US_BACK]  < OBSTACLE_CM;
-                s_left_blocked  = us_snap.valid[US_LEFT]  && us_snap.distance_cm[US_LEFT]  < OBSTACLE_CM;
-                s_right_blocked = us_snap.valid[US_RIGHT] && us_snap.distance_cm[US_RIGHT] < OBSTACLE_CM;
-
-                any_obstacle = s_front_blocked || s_back_blocked || s_left_blocked || s_right_blocked;
-                all_clear    = !any_obstacle;
-
-                if (any_obstacle) {
-                    clear_count = 0;
-                    obstacle_count++;
-                    if (obstacle_count >= 8) s_obstacle = true;
-                } else {
-                    obstacle_count = 0;
-                    clear_count++;
-                    if (clear_count >= 10 && all_clear) s_obstacle = false;
-                }
-                s_last_update = t_now;
-            }
+            obstacle_count = 0;
+            clear_count++;
+            if (clear_count >= 3 && all_clear) s_obstacle = false;
+        }
+        s_last_update = t_now;
         }
         g_emergency_stop = s_obstacle;
 
-
-        // ── 5. Xác định mode ─────────────────────────────────────────────────
+        // ── 5. Xác định mode (Có bộ lọc debounce chống rớt sóng RC ngắn) ──
+        static int s_rc_lost_counter = 0; // Biến tĩnh lưu số chu kỳ mất sóng liên tiếp
         bool swc_manual = has_rc && (rc.channel[CH_SWC] > 1700);
         bool uart_fresh = (g_last_uart_us > 0) &&
                           ((t_now - g_last_uart_us) < UART_TIMEOUT_US);
 
         if (swc_manual) {
             g_mode = MODE_MANUAL;
+            s_rc_lost_counter = 0; // Có sóng khỏe -> reset bộ đếm lỗi
         } else if (uart_fresh) {
             g_mode = MODE_AUTO_UART;
+            s_rc_lost_counter = 0;
         } else {
-            g_mode = MODE_WAITING;
+            // Nếu trước đó đang ở MANUAL mà đột ngột mất sóng (has_rc == false hoặc gạt switch lỗi)
+            if (g_mode == MODE_MANUAL && s_rc_lost_counter < 5) { 
+                s_rc_lost_counter++;
+                // GIỮ NGUYÊN g_mode = MODE_MANUAL, bỏ qua chu kỳ nhiễu này, không nhảy về WAITING
+            } else {
+                g_mode = MODE_WAITING; // Mất sóng thật sự quá 50ms mới khóa xe
+            }
         }
 
         // // ── 6. Motor off
@@ -372,6 +384,18 @@ static void control_task(void *pv) {
             break;
         }
 
+        // ── 7b. Lưu intent (trước khi interlock) — dùng cho hard cutoff ───────
+        bool intent_fwd  = vel.vx > 0.0f;
+        bool intent_bwd  = vel.vx < 0.0f;
+        bool intent_left = vel.vy > 0.0f;
+        bool intent_right= vel.vy < 0.0f;
+
+        // ── 7c. Khóa chéo (Interlock) — chặn setpoint trước PID, KHÔNG reset PID ──
+        if (s_front_blocked && vel.vx > 0.0f) vel.vx = 0.0f;
+        if (s_back_blocked  && vel.vx < 0.0f) vel.vx = 0.0f;
+        if (s_left_blocked  && vel.vy > 0.0f) vel.vy = 0.0f;
+        if (s_right_blocked && vel.vy < 0.0f) vel.vy = 0.0f;
+
         // ── 8. Forward kinematics → actual velocity ───────────────────────────
         wheel_velocity_t enc_wheels = {
             .fl = g_enc_rpm[ENC_FL] * 2.0f * 3.14159f / 60.0f,
@@ -381,16 +405,11 @@ static void control_task(void *pv) {
         };
         agv_velocity_t actual_vel = kinematics_forward(enc_wheels);
 
-        // ── 9. Controller + obstacle clamp ────────────────────────────────────
+        // ── 9. Controller — tính toán thuần túy, không clamp ở đây ────────────
         agv_velocity_t ctrl_out = {0};
         ctrl_out.vx = vel.vx + pid_update_vx(&g_pid, vel.vx, actual_vel.vx, dt_actual);
         ctrl_out.vy = vel.vy + pid_update_vy(&g_pid, vel.vy, actual_vel.vy, dt_actual);
         ctrl_out.wz = vel.wz + pid_update_wz(&g_pid, vel.wz, actual_vel.wz, dt_actual);
-
-        if (s_front_blocked && ctrl_out.vx > 0) { ctrl_out.vx = 0; pid_reset_vx(&g_pid); }
-        if (s_back_blocked  && ctrl_out.vx < 0) { ctrl_out.vx = 0; pid_reset_vx(&g_pid); }
-        if (s_left_blocked  && ctrl_out.vy > 0) { ctrl_out.vy = 0; pid_reset_vy(&g_pid); }
-        if (s_right_blocked && ctrl_out.vy < 0) { ctrl_out.vy = 0; pid_reset_vy(&g_pid); }
 
         // ── 10. Inverse kinematics → PWM ─────────────────────────────────────
         wheel_velocity_t wheels = kinematics_inverse(ctrl_out);
@@ -398,6 +417,19 @@ static void control_task(void *pv) {
         int pwm_fr = kinematics_radps_to_pwm(wheels.fr);
         int pwm_rl = kinematics_radps_to_pwm(wheels.rl);
         int pwm_rr = kinematics_radps_to_pwm(wheels.rr);
+
+        // ── 10b. Hard cutoff PWM — tầng bảo vệ cuối ──
+        // Thêm điều kiện g_obstacle_enabled bọc ngoài để chắc chắn tầng PWM không bị ngắt vô duyên khi bạn đã chủ động tắt cảm biến
+        if (g_obstacle_enabled && 
+           ((s_front_blocked && intent_fwd) ||
+            (s_back_blocked  && intent_bwd) ||
+            (s_left_blocked  && intent_left) ||
+            (s_right_blocked && intent_right))) {
+            
+            pwm_fl = 0; pwm_fr = 0; pwm_rl = 0; pwm_rr = 0;
+        }
+
+
 
         motor_set(MOTOR_FL, pwm_fl);
         motor_set(MOTOR_FR, pwm_fr);
