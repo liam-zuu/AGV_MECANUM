@@ -69,9 +69,8 @@ void motor_init(void) {
             MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP,
                 comparators[i][1], MCPWM_GEN_ACTION_LOW));
 
-        // Set duty = 0
-        mcpwm_comparator_set_compare_value(comparators[i][0], 0);
-        mcpwm_comparator_set_compare_value(comparators[i][1], 0);
+mcpwm_comparator_set_compare_value(comparators[i][0], PWM_RESOLUTION);
+mcpwm_comparator_set_compare_value(comparators[i][1], PWM_RESOLUTION);
 
         // Start timer
         mcpwm_timer_enable(timers[i]);
@@ -92,22 +91,43 @@ void motor_init(void) {
     ESP_LOGI(TAG, "Motor init done (MCPWM)");
 }
 
+// void motor_set(motor_id_t id, int speed) {
+//     if (id >= MOTOR_COUNT) return;
+
+//     if (speed >  PWM_MAX) speed =  PWM_MAX;
+//     if (speed < -PWM_MAX) speed = -PWM_MAX;
+
+//     uint32_t rpwm = 0, lpwm = 0;
+//     if (speed > 0) {
+//         rpwm = (uint32_t)speed;
+//     } else if (speed < 0) {
+//         lpwm = (uint32_t)(-speed);
+//     }
+
+//     mcpwm_comparator_set_compare_value(comparators[id][0], rpwm);
+//     mcpwm_comparator_set_compare_value(comparators[id][1], lpwm);
+// }
+
 void motor_set(motor_id_t id, int speed) {
     if (id >= MOTOR_COUNT) return;
 
     if (speed >  PWM_MAX) speed =  PWM_MAX;
     if (speed < -PWM_MAX) speed = -PWM_MAX;
 
-    uint32_t rpwm = 0, lpwm = 0;
+    uint32_t rpwm = PWM_RESOLUTION;  // default: LOW
+    uint32_t lpwm = PWM_RESOLUTION;  // default: LOW
+
     if (speed > 0) {
-        rpwm = (uint32_t)speed;
+        rpwm = PWM_RESOLUTION - (uint32_t)speed;  // duty = speed/1000
+        lpwm = PWM_RESOLUTION;                     // LPWM = 0%
     } else if (speed < 0) {
-        lpwm = (uint32_t)(-speed);
+        rpwm = PWM_RESOLUTION;                     // RPWM = 0%
+        lpwm = PWM_RESOLUTION - (uint32_t)(-speed);
     }
 
     mcpwm_comparator_set_compare_value(comparators[id][0], rpwm);
     mcpwm_comparator_set_compare_value(comparators[id][1], lpwm);
-}
+}    
 
 void motor_stop_all(void) {
     for (int i = 0; i < MOTOR_COUNT; i++) {
