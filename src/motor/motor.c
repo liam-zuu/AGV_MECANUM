@@ -69,8 +69,8 @@ void motor_init(void) {
             MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP,
                 comparators[i][1], MCPWM_GEN_ACTION_LOW));
 
-mcpwm_comparator_set_compare_value(comparators[i][0], PWM_RESOLUTION);
-mcpwm_comparator_set_compare_value(comparators[i][1], PWM_RESOLUTION);
+        mcpwm_comparator_set_compare_value(comparators[i][0], PWM_RESOLUTION);
+        mcpwm_comparator_set_compare_value(comparators[i][1], PWM_RESOLUTION);
 
         // Start timer
         mcpwm_timer_enable(timers[i]);
