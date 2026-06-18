@@ -13,7 +13,7 @@
 #include "wifi/wifi.h"
 #include "imu/imu.h"
 #include "led_buzzer/led_buzzer.h"
-#include "rasp_uart/rasp_uart.h"
+#include "traj_receiver/traj_receiver.h"
 #include "ultrasonic/ultrasonic.h"
 #include "manual_control/manual_control.h"
 #include "controller/pid.h"
@@ -39,45 +39,49 @@ static const char *TAG = "MAIN";
 #define CH_SWB  8   // channel 9 — tắt/bật ultrasonic obstacle
 
 // ─── Threshold ────────────────────────────────────────────────────────────────
-#define OBSTACLE_CM     20.0f      // tăng lên 20cm — US-015 không ổn định dưới 10cm
-#define UART_TIMEOUT_US 200000LL   // 200ms tính bằng µs
+#define OBSTACLE_CM      20.0f      // tăng lên 20cm — US-015 không ổn định dưới 10cm
+#define TRAJ_TIMEOUT_US  200000LL   // 200ms tính bằng µs
 
 // ─── System mode ─────────────────────────────────────────────────────────────
 typedef enum {
     MODE_WAITING = 0,
     MODE_MANUAL,
-    MODE_AUTO_UART,
-    MODE_AUTO_WIFI,
+    MODE_AUTO,
 } system_mode_t;
 
 // ─── Shared state ─────────────────────────────────────────────────────────────
-static volatile system_mode_t g_mode           = MODE_WAITING;
-static volatile bool          g_emergency_stop = false;
-static volatile bool          g_motor_enabled  = false;
-static volatile int64_t       g_last_uart_us   = 0;
+static volatile system_mode_t  g_mode            = MODE_WAITING;
+static volatile bool           g_emergency_stop  = false;
+static volatile bool           g_motor_enabled   = false;
+static volatile int64_t        g_last_traj_us    = 0;
 
-static volatile rasp_setpoint_t g_setpoint     = {0};
-static volatile float           g_enc_rpm[4]   = {0};
-static volatile int32_t         g_enc_count[4] = {0};
-static volatile imu_data_t      g_imu_data     = {0};
-static volatile us_data_t       g_us_data      = {0};
-static SemaphoreHandle_t        g_us_mutex;        // bảo vệ g_us_data khỏi race condition dual-core
+static volatile traj_setpoint_t g_setpoint        = {0};
+static volatile float            g_enc_rpm[4]     = {0};
+static volatile int32_t          g_enc_count[4]   = {0};
+static volatile imu_data_t       g_imu_data       = {0};
+static volatile us_data_t        g_us_data        = {0};
+static SemaphoreHandle_t         g_us_mutex;
 
 static pid_controller_t g_pid;
 // static adrc_controller_t g_adrc;
 
-
 static volatile bool g_obstacle_enabled = true;
 
 // ─────────────────────────────────────────
-// CORE 0 - rasp_task (priority 3)
+// CORE 0 - traj_task (priority 3)
 // ─────────────────────────────────────────
-static void rasp_task(void *pv) {
-    rasp_setpoint_t sp;
+static void traj_task(void *pv) {
     while (1) {
-        if (rasp_uart_read_setpoint(&sp)) {
+        traj_setpoint_t sp  = traj_receiver_get();
+        traj_source_t   src = traj_receiver_source();
+        /* traj_receiver_get() trả về {0} khi timeout.
+         * Dùng g_last_us trong traj_receiver để quyết định fresh/stale
+         * thay vì check source. */
+        bool fresh = (traj_receiver_source() != TRAJ_SRC_NONE);
+        if (fresh) {
+            ESP_LOGI(TAG, "traj fresh src=%d vx=%.2f", src, sp.vx);  // thêm
             g_setpoint     = sp;
-            g_last_uart_us = esp_timer_get_time();
+            g_last_traj_us = esp_timer_get_time();
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -105,19 +109,19 @@ static void ultrasonic_task(void *pv) {
             }
 
             if (valid_count == 0) {
-                filtered.valid[i] = false;
+                filtered.valid[i]       = false;
                 filtered.distance_cm[i] = -1.0f;
             } else if (valid_count == 1) {
-                filtered.valid[i] = true;
+                filtered.valid[i]       = true;
                 filtered.distance_cm[i] = vals[0];
             } else if (valid_count == 2) {
-                filtered.valid[i] = true;
+                filtered.valid[i]       = true;
                 filtered.distance_cm[i] = (vals[0] + vals[1]) / 2.0f;
             } else {
                 if (vals[0] > vals[1]) { float t = vals[0]; vals[0] = vals[1]; vals[1] = t; }
                 if (vals[1] > vals[2]) { float t = vals[1]; vals[1] = vals[2]; vals[2] = t; }
                 if (vals[0] > vals[1]) { float t = vals[0]; vals[0] = vals[1]; vals[1] = t; }
-                filtered.valid[i] = true;
+                filtered.valid[i]       = true;
                 filtered.distance_cm[i] = vals[1];
             }
         }
@@ -129,6 +133,7 @@ static void ultrasonic_task(void *pv) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
+
 // ─────────────────────────────────────────
 // CORE 0 - led_task (priority 2)
 // ─────────────────────────────────────────
@@ -179,13 +184,12 @@ static void led_task(void *pv) {
             break;
         }
 
-        case MODE_AUTO_UART:
-            led_set_color((rgb_color_t){0, 100, 255});
-            vTaskDelay(pdMS_TO_TICKS(100));
-            break;
-
-        case MODE_AUTO_WIFI:
-            led_set_color((rgb_color_t){180, 0, 255});
+        case MODE_AUTO:
+            /* Màu theo source: UART=xanh dương, WiFi=tím */
+            if (traj_receiver_source() == TRAJ_SRC_UART)
+                led_set_color((rgb_color_t){0, 100, 255});
+            else
+                led_set_color((rgb_color_t){180, 0, 255});
             vTaskDelay(pdMS_TO_TICKS(100));
             break;
         }
@@ -226,9 +230,9 @@ static void imu_task(void *pv) {
 // CORE 1 - control_task (priority 5)
 // ─────────────────────────────────────────
 static void control_task(void *pv) {
-    const float dt  = 0.01f;
-    int64_t t_prev  = esp_timer_get_time();
-    bool    swa_prev   = false;
+    const float dt = 0.01f;
+    int64_t t_prev = esp_timer_get_time();
+    bool    swa_prev = false;
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
@@ -243,104 +247,119 @@ static void control_task(void *pv) {
         bool has_rc = ibus_get(&rc);
 
         // ── 2. SWA — motor enable/disable ────────────────────────────────────
-        bool swa_on = has_rc && (rc.channel[CH_SWA] > 1500);
-        if (swa_on != swa_prev) {
-            g_emergency_stop = false;
-            swa_prev         = swa_on;
-        }
-        if (g_motor_enabled != swa_on) {
-            g_motor_enabled = swa_on;
-            motor_enable(swa_on);
-        }
+        // bool swa_on = has_rc && (rc.channel[CH_SWA] > 1500);
+        // if (swa_on != swa_prev) {
+        //     g_emergency_stop = false;
+        //     swa_prev         = swa_on;
+        // }
+        // if (g_motor_enabled != swa_on) {
+        //     g_motor_enabled = swa_on;
+        //     motor_enable(swa_on);
+        // }
+
+
+        // ── 2. SWA — motor enable/disable ────────────────────────────────────
+        #define HIL_BYPASS_MOTOR_ENABLE  // TODO: remove when testing on real AGV
+        #ifdef HIL_BYPASS_MOTOR_ENABLE
+                bool swa_on = true;
+        #else
+                bool swa_on = has_rc && (rc.channel[CH_SWA] > 1500);
+        #endif
+                if (swa_on != swa_prev) {
+                    g_emergency_stop = false;
+                    swa_prev         = swa_on;
+                }
+                if (g_motor_enabled != swa_on) {
+                    g_motor_enabled = swa_on;
+                    motor_enable(swa_on);
+                }
+
 
         // ── 2b. SWB — tắt/bật obstacle detection (chỉ hoạt động ở MANUAL) ───
         if (has_rc && g_mode == MODE_MANUAL) {
             g_obstacle_enabled = (rc.channel[CH_SWB] < 1500);
         } else {
-            g_obstacle_enabled = true;  // AUTO mode luôn bật obstacle
+            g_obstacle_enabled = true;
         }
 
         // ── 3. SWD — buzzer (TODO: task riêng) ───────────────────────────────
 
-        // ── 4. Emergency stop — ultrasonic ────────────────────────────────────
-        static bool s_obstacle = false;
-        static int64_t s_last_update = 0;
-        static int obstacle_count = 0;
-        static int clear_count = 0;
-        static bool s_front_blocked = false;
-        static bool s_back_blocked  = false;
-        static bool s_left_blocked  = false;
-        static bool s_right_blocked = false;
+        // ── 4. Emergency stop — ultrasonic ───────────────────────────────────
+        static bool    s_obstacle      = false;
+        static int64_t s_last_update   = 0;
+        static int     obstacle_count  = 0;
+        static int     clear_count     = 0;
+        static bool    s_front_blocked = false;
+        static bool    s_back_blocked  = false;
+        static bool    s_left_blocked  = false;
+        static bool    s_right_blocked = false;
 
-        // Snapshot an toàn — tránh race condition dual-core
-        static us_data_t us_snap = {0}; 
+        static us_data_t us_snap = {0};
         bool us_data_fresh = false;
 
         if (xSemaphoreTake(g_us_mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
-            us_snap = g_us_data; // Cập nhật dữ liệu mới nếu lấy được mutex
+            us_snap = g_us_data;
             xSemaphoreGive(g_us_mutex);
             us_data_fresh = true;
         }
 
         if (us_data_fresh && (t_now - s_last_update > 50000LL)) {
-        bool any_obstacle = false;
-        bool all_clear    = true;
+            bool any_obstacle = false;
+            bool all_clear    = true;
 
-        // Nếu g_obstacle_enabled = false, ta ép các cờ blocked bằng false luôn
-        if (g_obstacle_enabled) {
-            s_front_blocked = us_snap.valid[US_FRONT] && us_snap.distance_cm[US_FRONT] < OBSTACLE_CM;
-            s_back_blocked  = us_snap.valid[US_BACK]  && us_snap.distance_cm[US_BACK]  < OBSTACLE_CM;
-            s_left_blocked  = us_snap.valid[US_LEFT]  && us_snap.distance_cm[US_LEFT]  < OBSTACLE_CM;
-            s_right_blocked = us_snap.valid[US_RIGHT] && us_snap.distance_cm[US_RIGHT] < OBSTACLE_CM;
-        } else {
-            s_front_blocked = false;
-            s_back_blocked  = false;
-            s_left_blocked  = false;
-            s_right_blocked = false;
-        }
+            if (g_obstacle_enabled) {
+                s_front_blocked = us_snap.valid[US_FRONT] && us_snap.distance_cm[US_FRONT] < OBSTACLE_CM;
+                s_back_blocked  = us_snap.valid[US_BACK]  && us_snap.distance_cm[US_BACK]  < OBSTACLE_CM;
+                s_left_blocked  = us_snap.valid[US_LEFT]  && us_snap.distance_cm[US_LEFT]  < OBSTACLE_CM;
+                s_right_blocked = us_snap.valid[US_RIGHT] && us_snap.distance_cm[US_RIGHT] < OBSTACLE_CM;
+            } else {
+                s_front_blocked = false;
+                s_back_blocked  = false;
+                s_left_blocked  = false;
+                s_right_blocked = false;
+            }
 
-            any_obstacle = s_front_blocked || s_back_blocked || s_left_blocked || s_right_blocked;
+            any_obstacle = s_front_blocked || s_back_blocked ||
+                           s_left_blocked  || s_right_blocked;
             all_clear    = !any_obstacle;
 
-        if (any_obstacle) {
-            clear_count = 0;
-            obstacle_count++;
-            if (obstacle_count >= 2) s_obstacle = true;
-        } else {
-            obstacle_count = 0;
-            clear_count++;
-            if (clear_count >= 3 && all_clear) s_obstacle = false;
-        }
-        s_last_update = t_now;
+            if (any_obstacle) {
+                clear_count = 0;
+                obstacle_count++;
+                if (obstacle_count >= 2) s_obstacle = true;
+            } else {
+                obstacle_count = 0;
+                clear_count++;
+                if (clear_count >= 3 && all_clear) s_obstacle = false;
+            }
+            s_last_update = t_now;
         }
         g_emergency_stop = s_obstacle;
 
-        // ── 5. Xác định mode (Có bộ lọc debounce chống rớt sóng RC ngắn) ──
-        static int s_rc_lost_counter = 0; // Biến tĩnh lưu số chu kỳ mất sóng liên tiếp
-        bool swc_manual = has_rc && (rc.channel[CH_SWC] > 1700);
-        bool uart_fresh = (g_last_uart_us > 0) &&
-                          ((t_now - g_last_uart_us) < UART_TIMEOUT_US);
+        // ── 5. Xác định mode ─────────────────────────────────────────────────
+        static int s_rc_lost_counter = 0;
+        bool swc_manual  = has_rc && (rc.channel[CH_SWC] > 1700);
+        bool traj_fresh  = (g_last_traj_us > 0) &&
+                           ((t_now - g_last_traj_us) < TRAJ_TIMEOUT_US);
 
         if (swc_manual) {
             g_mode = MODE_MANUAL;
-            s_rc_lost_counter = 0; // Có sóng khỏe -> reset bộ đếm lỗi
-        } else if (uart_fresh) {
-            g_mode = MODE_AUTO_UART;
+            s_rc_lost_counter = 0;
+        } else if (traj_fresh) {
+            g_mode = MODE_AUTO;
             s_rc_lost_counter = 0;
         } else {
-            // Nếu trước đó đang ở MANUAL mà đột ngột mất sóng (has_rc == false hoặc gạt switch lỗi)
-            if (g_mode == MODE_MANUAL && s_rc_lost_counter < 5) { 
+            if (g_mode == MODE_MANUAL && s_rc_lost_counter < 5) {
                 s_rc_lost_counter++;
-                // GIỮ NGUYÊN g_mode = MODE_MANUAL, bỏ qua chu kỳ nhiễu này, không nhảy về WAITING
             } else {
-                g_mode = MODE_WAITING; // Mất sóng thật sự quá 50ms mới khóa xe
+                g_mode = MODE_WAITING;
             }
         }
 
-        // // ── 6. Motor off
-          if (!g_motor_enabled) {
+        // ── 6. Motor off ──────────────────────────────────────────────────────
+        if (!g_motor_enabled) {
             motor_stop_all();
-            rasp_uart_send_status(0, 0, 0);
+            traj_receiver_send_status(0, 0, 0);
             continue;
         }
 
@@ -357,26 +376,23 @@ static void control_task(void *pv) {
                 vel.wz = -ibus_channel_normalized(&rc, CH_RX) / 500.0f * speed_scale;
             }
             break;
-        case MODE_AUTO_UART:
+        case MODE_AUTO:
             vel.vx = g_setpoint.vx;
             vel.vy = g_setpoint.vy;
             vel.wz = g_setpoint.wz;
-            break;
-        case MODE_AUTO_WIFI:
-            // TODO: WiFi UDP buffer
             break;
         case MODE_WAITING:
         default:
             break;
         }
 
-        // ── 7b. Lưu intent (trước khi interlock) — dùng cho hard cutoff ───────
-        bool intent_fwd  = vel.vx > 0.0f;
-        bool intent_bwd  = vel.vx < 0.0f;
-        bool intent_left = vel.vy > 0.0f;
-        bool intent_right= vel.vy < 0.0f;
+        // ── 7b. Lưu intent (trước khi interlock) ─────────────────────────────
+        bool intent_fwd   = vel.vx > 0.0f;
+        bool intent_bwd   = vel.vx < 0.0f;
+        bool intent_left  = vel.vy > 0.0f;
+        bool intent_right = vel.vy < 0.0f;
 
-        // ── 7c. Khóa chéo (Interlock) — chặn setpoint trước PID, KHÔNG reset PID ──
+        // ── 7c. Interlock ─────────────────────────────────────────────────────
         if (s_front_blocked && vel.vx > 0.0f) vel.vx = 0.0f;
         if (s_back_blocked  && vel.vx < 0.0f) vel.vx = 0.0f;
         if (s_left_blocked  && vel.vy > 0.0f) vel.vy = 0.0f;
@@ -391,7 +407,7 @@ static void control_task(void *pv) {
         };
         agv_velocity_t actual_vel = kinematics_forward(enc_wheels);
 
-        // ── 9. Controller — tính toán thuần túy, không clamp ở đây ────────────
+        // ── 9. Controller ─────────────────────────────────────────────────────
         agv_velocity_t ctrl_out = {0};
         ctrl_out.vx = vel.vx + pid_update_vx(&g_pid, vel.vx, actual_vel.vx, dt_actual);
         ctrl_out.vy = vel.vy + pid_update_vy(&g_pid, vel.vy, actual_vel.vy, dt_actual);
@@ -404,18 +420,14 @@ static void control_task(void *pv) {
         int pwm_rl = kinematics_radps_to_pwm(wheels.rl);
         int pwm_rr = kinematics_radps_to_pwm(wheels.rr);
 
-        // ── 10b. Hard cutoff PWM — tầng bảo vệ cuối ──
-        // Thêm điều kiện g_obstacle_enabled bọc ngoài để chắc chắn tầng PWM không bị ngắt vô duyên khi bạn đã chủ động tắt cảm biến
-        if (g_obstacle_enabled && 
-           ((s_front_blocked && intent_fwd) ||
-            (s_back_blocked  && intent_bwd) ||
-            (s_left_blocked  && intent_left) ||
+        // ── 10b. Hard cutoff PWM ──────────────────────────────────────────────
+        if (g_obstacle_enabled &&
+           ((s_front_blocked && intent_fwd)   ||
+            (s_back_blocked  && intent_bwd)   ||
+            (s_left_blocked  && intent_left)  ||
             (s_right_blocked && intent_right))) {
-            
             pwm_fl = 0; pwm_fr = 0; pwm_rl = 0; pwm_rr = 0;
         }
-
-
 
         motor_set(MOTOR_FL, pwm_fl);
         motor_set(MOTOR_FR, pwm_fr);
@@ -423,7 +435,7 @@ static void control_task(void *pv) {
         motor_set(MOTOR_RR, pwm_rr);
 
         // ── 11. Gửi status về H7 ─────────────────────────────────────────────
-        rasp_uart_send_status(actual_vel.vx, actual_vel.vy, actual_vel.wz);
+        traj_receiver_send_status(actual_vel.vx, actual_vel.vy, actual_vel.wz);
 
         // ── 12. Push log ──────────────────────────────────────────────────────
         log_data_t logdata = {
@@ -484,7 +496,7 @@ void app_main(void) {
     ibus_init();
     imu_init();
     ultrasonic_init();
-    rasp_uart_init();
+    traj_receiver_init();
     logger_init();
 
     // Init controller
@@ -496,13 +508,9 @@ void app_main(void) {
     ESP_LOGI(TAG, "Controller: ADRC");
 #endif
 
-    // Motor OFF khi boot — SWA mới enable
     motor_enable(false);
-
-    // Khởi tạo mutex bảo vệ g_us_data
     g_us_mutex = xSemaphoreCreateMutex();
 
-    // Boot xong — 2 tiếng, LED trắng (WAITING)
     buzzer_beep(2700, 100);
     vTaskDelay(pdMS_TO_TICKS(100));
     buzzer_beep(2700, 100);
@@ -510,9 +518,8 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "Boot done — WAITING");
 
-    // Tasks
     xTaskCreatePinnedToCore(ibus_task,       "ibus",       4096, NULL, 4, NULL, 0);
-    xTaskCreatePinnedToCore(rasp_task,       "rasp",       4096, NULL, 3, NULL, 0);
+    xTaskCreatePinnedToCore(traj_task,       "traj",       4096, NULL, 3, NULL, 0);
     xTaskCreatePinnedToCore(led_task,        "led",        4096, NULL, 2, NULL, 0);
     xTaskCreatePinnedToCore(ultrasonic_task, "ultrasonic", 4096, NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(logger_task,     "logger",     4096, NULL, 1, NULL, 0);
