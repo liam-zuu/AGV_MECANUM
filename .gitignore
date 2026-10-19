@@ -3,3 +3,7 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# BNO08x library: generated docs and README images are not needed to build
+components/esp32_BNO08x/docs/
+components/esp32_BNO08x/README_images/
