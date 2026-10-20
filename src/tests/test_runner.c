@@ -33,6 +33,9 @@
 #ifdef TEST_MANUAL
 #include "test_manual.h"
 #endif
+#ifdef TEST_OPENLOOP
+#include "test_openloop.h"
+#endif
 
 void run_tests(void) {
 #ifdef TEST_MOTOR
@@ -57,5 +60,7 @@ void run_tests(void) {
     test_kinematics();
 #elif defined(TEST_MANUAL)
     test_manual();
+#elif defined(TEST_OPENLOOP)
+    test_openloop();
 #endif
 }
