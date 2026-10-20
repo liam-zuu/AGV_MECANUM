@@ -14,7 +14,7 @@
 #define RR_ENC_A    20
 #define RR_ENC_B    19
 
-#define PPR         1320    // Pulses per revolution
+#define PPR         1320    // Counts per wheel revolution: 330 pulses/channel (GB37-520: 11 x 30:1) x 4 (PCNT counts both edges of A and B)
 
 typedef enum {
     ENC_FL = 0,
