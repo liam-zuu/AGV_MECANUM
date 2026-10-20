@@ -21,6 +21,14 @@ static const struct {
     [MOTOR_RR] = {RR_LPWM, RR_RPWM, 1},  // đổi chỗ
 };
 
+// Chiều lệnh từng bánh: +1 giữ nguyên, -1 đảo. Bù cho dây motor đấu ngược.
+// Spec S01 chạy thử 20/10/2026: với +1, PWM dương làm bánh FL quay LÙI (count âm),
+// do commit 6b794c2 đảo logic PWM mà vẫn giữ phép đổi chỗ chân ở motor_cfg.
+// GIÁ TRỊ CHỐT SAU S01 run01 (đo đủ 4 bánh); trước đó để +1 để S01 đo hành vi gốc.
+// Nhớ đặt cực tính dây tương ứng cho plant HIL (rpi5/params.py motor_polarity,
+// matlab params_mecanum.m params.motor_polarity) để HIL mô hình đúng xe thật.
+static const int8_t motor_dir[MOTOR_COUNT] = { +1, +1, +1, +1 };
+
 void motor_init(void) {
     for (int i = 0; i < MOTOR_COUNT; i++) {
         // Timer
@@ -114,8 +122,10 @@ void motor_set(motor_id_t id, int speed) {
     if (speed >  PWM_MAX) speed =  PWM_MAX;
     if (speed < -PWM_MAX) speed = -PWM_MAX;
 
-    uint32_t rpwm = PWM_RESOLUTION;  // default: LOW
-    uint32_t lpwm = PWM_RESOLUTION;  // default: LOW
+    speed *= motor_dir[id];
+
+    uint32_t rpwm = PWM_RESOLUTION;  // compare = period: HIGH cả chu kỳ (2 chân HIGH = hãm)
+    uint32_t lpwm = PWM_RESOLUTION;
 
     if (speed > 0) {
         rpwm = PWM_RESOLUTION - (uint32_t)speed;  // duty = speed/1000
