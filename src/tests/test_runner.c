@@ -36,6 +36,9 @@
 #ifdef TEST_OPENLOOP
 #include "test_openloop.h"
 #endif
+#ifdef TEST_IMU_LOG
+#include "test_imu_log.h"
+#endif
 
 void run_tests(void) {
 #ifdef TEST_MOTOR
@@ -62,5 +65,7 @@ void run_tests(void) {
     test_manual();
 #elif defined(TEST_OPENLOOP)
     test_openloop();
+#elif defined(TEST_IMU_LOG)
+    test_imu_log();
 #endif
 }
