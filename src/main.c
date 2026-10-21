@@ -16,16 +16,12 @@
 #include "traj_receiver/traj_receiver.h"
 #include "ultrasonic/ultrasonic.h"
 #include "manual_control/manual_control.h"
-#include "controller/pid.h"
-#include "controller/adrc.h"
+#include "controller/vel_ctrl.h"
 #include "tests/test_runner.h"
 
 static const char *TAG = "MAIN";
 
-// ─── Controller mode ──────────────────────────────────────────────────────────
-#define CTRL_PID   0
-#define CTRL_ADRC  1
-#define CTRL_MODE  CTRL_PID   // ← đổi ở đây
+// ─── Controller mode: CTRL_MODE trong controller/vel_ctrl.h ──────────────────
 
 // ─── IBus channel (tay cầm đếm từ 1, index = channel - 1) ───────────────────
 #define CH_LX   0   // channel 1 — left stick X  → vy
@@ -61,9 +57,6 @@ static volatile int32_t          g_enc_count[4]   = {0};
 static volatile imu_data_t       g_imu_data       = {0};
 static volatile us_data_t        g_us_data        = {0};
 static SemaphoreHandle_t         g_us_mutex;
-
-static pid_controller_t g_pid;
-// static adrc_controller_t g_adrc;
 
 static volatile bool g_obstacle_enabled = true;
 
@@ -398,27 +391,15 @@ static void control_task(void *pv) {
         if (s_left_blocked  && vel.vy > 0.0f) vel.vy = 0.0f;
         if (s_right_blocked && vel.vy < 0.0f) vel.vy = 0.0f;
 
-        // ── 8. Forward kinematics → actual velocity ───────────────────────────
-        wheel_velocity_t enc_wheels = {
-            .fl = g_enc_rpm[ENC_FL] * 2.0f * 3.14159f / 60.0f,
-            .fr = g_enc_rpm[ENC_FR] * 2.0f * 3.14159f / 60.0f,
-            .rl = g_enc_rpm[ENC_RL] * 2.0f * 3.14159f / 60.0f,
-            .rr = g_enc_rpm[ENC_RR] * 2.0f * 3.14159f / 60.0f,
-        };
-        agv_velocity_t actual_vel = kinematics_forward(enc_wheels);
-
-        // ── 9. Controller ─────────────────────────────────────────────────────
-        agv_velocity_t ctrl_out = {0};
-        ctrl_out.vx = vel.vx + pid_update_vx(&g_pid, vel.vx, actual_vel.vx, dt_actual);
-        ctrl_out.vy = vel.vy + pid_update_vy(&g_pid, vel.vy, actual_vel.vy, dt_actual);
-        ctrl_out.wz = vel.wz + pid_update_wz(&g_pid, vel.wz, actual_vel.wz, dt_actual);
-
-        // ── 10. Inverse kinematics → PWM ─────────────────────────────────────
-        wheel_velocity_t wheels = kinematics_inverse(ctrl_out);
-        int pwm_fl = kinematics_radps_to_pwm(wheels.fl);
-        int pwm_fr = kinematics_radps_to_pwm(wheels.fr);
-        int pwm_rl = kinematics_radps_to_pwm(wheels.rl);
-        int pwm_rr = kinematics_radps_to_pwm(wheels.rr);
+        // ── 8–10. FK → controller → IK → PWM (controller/vel_ctrl.c) ─────────
+        float enc_rpm[4] = { g_enc_rpm[ENC_FL], g_enc_rpm[ENC_FR],
+                             g_enc_rpm[ENC_RL], g_enc_rpm[ENC_RR] };
+        vel_ctrl_out_t vc = vel_ctrl_step(vel, enc_rpm, dt_actual);
+        agv_velocity_t actual_vel = vc.actual;
+        int pwm_fl = vc.pwm[0];
+        int pwm_fr = vc.pwm[1];
+        int pwm_rl = vc.pwm[2];
+        int pwm_rr = vc.pwm[3];
 
         // ── 10b. Hard cutoff PWM ──────────────────────────────────────────────
         if (g_obstacle_enabled &&
@@ -500,13 +481,8 @@ void app_main(void) {
     logger_init();
 
     // Init controller
-#if CTRL_MODE == CTRL_PID
-    pid_init(&g_pid);
-    ESP_LOGI(TAG, "Controller: PID");
-#elif CTRL_MODE == CTRL_ADRC
-    adrc_init(&g_adrc);
-    ESP_LOGI(TAG, "Controller: ADRC");
-#endif
+    vel_ctrl_init();
+    ESP_LOGI(TAG, "Controller: %s", CTRL_MODE == CTRL_PID ? "PID" : "ADRC");
 
     motor_enable(false);
     g_us_mutex = xSemaphoreCreateMutex();
