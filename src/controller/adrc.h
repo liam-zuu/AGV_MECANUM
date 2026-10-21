@@ -12,7 +12,10 @@
 //   Plant order: 1st order (velocity control)
 //   State: [x1=velocity, x2=disturbance]
 //   ESO estimate cả x1 và x2 (disturbance tổng hợp)
-//   NLSEF = kp*(r - z1) - z2/b0  (compensation + setpoint tracking)
+//   u = (kp*(r - z1) - z2) / b0   (setpoint tracking + compensation)
+//
+// Dùng ở mức vận tốc thân (vel_ctrl.c): u là lệnh vận tốc thân TOÀN PHẦN
+// (m/s hoặc rad/s) đưa vào IK → PWM, không cộng thêm setpoint.
 // ─────────────────────────────────────────
 
 // ESO (Extended State Observer) — linear version
@@ -28,8 +31,9 @@ typedef struct {
 // ADRC single axis
 typedef struct {
     eso_t  eso;
-    float  kp;          // setpoint tracking gain
+    float  kp;          // setpoint tracking gain = omega_c (controller bandwidth)
     float  output_limit;
+    float  u_prev;      // lệnh của chu kỳ trước, đưa vào ESO
 } adrc_axis_t;
 
 // ADRC controller — 3 kênh độc lập
@@ -44,6 +48,9 @@ typedef struct {
 // ─────────────────────────────────────────
 void  adrc_init(adrc_controller_t *c);
 void  adrc_reset(adrc_controller_t *c);
+
+// Đặt lại tham số 1 kênh (dùng khi tune; giữ nguyên trạng thái ESO)
+void  adrc_set_params(adrc_axis_t *a, float omega_c, float omega_o, float b0, float out_limit);
 
 float adrc_update_vx(adrc_controller_t *c, float sp, float actual, float dt);
 float adrc_update_vy(adrc_controller_t *c, float sp, float actual, float dt);

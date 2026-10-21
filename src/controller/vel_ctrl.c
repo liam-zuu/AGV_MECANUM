@@ -1,14 +1,24 @@
 #include "vel_ctrl.h"
 
-static pid_controller_t g_pid;
+static pid_controller_t  g_pid;
+static adrc_controller_t g_adrc;
+static int               g_mode = CTRL_MODE;
 
 void vel_ctrl_init(void) {
-#if CTRL_MODE == CTRL_PID
     pid_init(&g_pid);
-#endif
+    adrc_init(&g_adrc);
+    g_mode = CTRL_MODE;
 }
 
-pid_controller_t *vel_ctrl_pid(void) { return &g_pid; }
+void vel_ctrl_set_mode(int mode) {
+    g_mode = (mode == CTRL_ADRC) ? CTRL_ADRC : CTRL_PID;
+    pid_reset(&g_pid);
+    adrc_reset(&g_adrc);
+}
+
+int                vel_ctrl_mode(void) { return g_mode; }
+pid_controller_t  *vel_ctrl_pid(void)  { return &g_pid; }
+adrc_controller_t *vel_ctrl_adrc(void) { return &g_adrc; }
 
 vel_ctrl_out_t vel_ctrl_step(agv_velocity_t vel, const float enc_rpm[4], float dt) {
     vel_ctrl_out_t o = {0};
@@ -23,9 +33,15 @@ vel_ctrl_out_t vel_ctrl_step(agv_velocity_t vel, const float enc_rpm[4], float d
     o.actual = kinematics_forward(enc_wheels);
 
     // ── 9. Controller ─────────────────────────────────────────────────────
-    o.ctrl_out.vx = vel.vx + pid_update_vx(&g_pid, vel.vx, o.actual.vx, dt);
-    o.ctrl_out.vy = vel.vy + pid_update_vy(&g_pid, vel.vy, o.actual.vy, dt);
-    o.ctrl_out.wz = vel.wz + pid_update_wz(&g_pid, vel.wz, o.actual.wz, dt);
+    if (g_mode == CTRL_ADRC) {
+        o.ctrl_out.vx = adrc_update_vx(&g_adrc, vel.vx, o.actual.vx, dt);
+        o.ctrl_out.vy = adrc_update_vy(&g_adrc, vel.vy, o.actual.vy, dt);
+        o.ctrl_out.wz = adrc_update_wz(&g_adrc, vel.wz, o.actual.wz, dt);
+    } else {
+        o.ctrl_out.vx = vel.vx + pid_update_vx(&g_pid, vel.vx, o.actual.vx, dt);
+        o.ctrl_out.vy = vel.vy + pid_update_vy(&g_pid, vel.vy, o.actual.vy, dt);
+        o.ctrl_out.wz = vel.wz + pid_update_wz(&g_pid, vel.wz, o.actual.wz, dt);
+    }
 
     // ── 10. Inverse kinematics → PWM ─────────────────────────────────────
     wheel_velocity_t wheels = kinematics_inverse(o.ctrl_out);
