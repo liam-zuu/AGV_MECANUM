@@ -16,22 +16,25 @@ static const struct {
     [ENC_RR] = {RR_ENC_A, RR_ENC_B},
 };
 
-// ─── Accumulated count để tránh PCNT wrap-around ─────────────────────────────
-// PCNT hardware chỉ đếm ±32767 rồi wrap về 0.
-// Dùng accumulator int32_t để track tổng count thật sự.
-static int32_t last_raw[ENC_COUNT]     = {0};  /* raw PCNT lần trước */
+// ─── Count tích lũy ──────────────────────────────────────────────────────────
+// Bộ đếm PCNT phần cứng về 0 khi chạm high_limit/low_limit (không tràn kiểu
+// int16). Bản cũ bù tràn ±65536 nên cứ 32767 count (~24.8 vòng) lại đọc ra
+// một nhịp tốc độ cực lớn (log xe thật 10/06: FL 32716 → 41, rpm −49559).
+// Sửa 21/10/2026: bật accum_count, driver tự cộng dồn khi chạm giới hạn
+// (cần đăng ký 2 giới hạn làm watch point), pcnt_unit_get_count trả tổng.
 static int32_t accum_count[ENC_COUNT]  = {0};  /* tổng tích lũy */
 static int64_t last_time_us[ENC_COUNT] = {0};
 static int32_t last_accum[ENC_COUNT]   = {0};  /* accum lần trước để tính delta */
 
-#define PCNT_RANGE  65536   /* 32767 - (-32768) + 1 */
-#define WRAP_THRESH 30000   /* > half range → đã wrap */
+#define PCNT_HIGH_LIMIT  32767
+#define PCNT_LOW_LIMIT  -32768
 
 void encoder_init(void) {
     for (int i = 0; i < ENC_COUNT; i++) {
         pcnt_unit_config_t unit_cfg = {
-            .high_limit = 32767,
-            .low_limit  = -32768,
+            .high_limit = PCNT_HIGH_LIMIT,
+            .low_limit  = PCNT_LOW_LIMIT,
+            .flags.accum_count = true,
         };
         pcnt_new_unit(&unit_cfg, &pcnt_units[i]);
 
@@ -66,11 +69,13 @@ void encoder_init(void) {
         };
         pcnt_unit_set_glitch_filter(pcnt_units[i], &filter);
 
+        pcnt_unit_add_watch_point(pcnt_units[i], PCNT_HIGH_LIMIT);
+        pcnt_unit_add_watch_point(pcnt_units[i], PCNT_LOW_LIMIT);
+
         pcnt_unit_enable(pcnt_units[i]);
         pcnt_unit_clear_count(pcnt_units[i]);
         pcnt_unit_start(pcnt_units[i]);
 
-        last_raw[i]     = 0;
         accum_count[i]  = 0;
         last_accum[i]   = 0;
         last_time_us[i] = esp_timer_get_time();
@@ -81,21 +86,9 @@ void encoder_init(void) {
 
 // ─── Internal: update accumulator ────────────────────────────────────────────
 static void _update_accum(enc_id_t id) {
-    int raw = 0;
-    pcnt_unit_get_count(pcnt_units[id], &raw);
-    int32_t raw32 = (int32_t)raw;
-
-    int32_t delta = raw32 - last_raw[id];
-
-    /* Detect wrap-around */
-    if (delta > WRAP_THRESH) {
-        delta -= PCNT_RANGE;   /* wrapped positive → thực ra là âm */
-    } else if (delta < -WRAP_THRESH) {
-        delta += PCNT_RANGE;   /* wrapped negative → thực ra là dương */
-    }
-
-    accum_count[id] += delta;
-    last_raw[id] = raw32;
+    int count = 0;
+    pcnt_unit_get_count(pcnt_units[id], &count);   /* đã gồm phần driver cộng dồn */
+    accum_count[id] = (int32_t)count;
 }
 
 int32_t encoder_get_count(enc_id_t id) {
@@ -107,7 +100,6 @@ int32_t encoder_get_count(enc_id_t id) {
 void encoder_clear(enc_id_t id) {
     if (id >= ENC_COUNT) return;
     pcnt_unit_clear_count(pcnt_units[id]);
-    last_raw[id]    = 0;
     accum_count[id] = 0;
     last_accum[id]  = 0;
     last_time_us[id] = esp_timer_get_time();
