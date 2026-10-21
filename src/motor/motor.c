@@ -24,10 +24,10 @@ static const struct {
 // Chiều lệnh từng bánh: +1 giữ nguyên, -1 đảo. Bù cho dây motor đấu ngược.
 // Spec S01 chạy thử 20/10/2026: với +1, PWM dương làm bánh FL quay LÙI (count âm),
 // do commit 6b794c2 đảo logic PWM mà vẫn giữ phép đổi chỗ chân ở motor_cfg.
-// GIÁ TRỊ CHỐT SAU S01 run01 (đo đủ 4 bánh); trước đó để +1 để S01 đo hành vi gốc.
+// Chốt 21/10/2026 theo S01 run01 (05_DATA/results/S01/2026-10-20_run01): cả 4 bánh quay lùi ở +PWM khi dir = +1.
 // Nhớ đặt cực tính dây tương ứng cho plant HIL (rpi5/params.py motor_polarity,
 // matlab params_mecanum.m params.motor_polarity) để HIL mô hình đúng xe thật.
-static const int8_t motor_dir[MOTOR_COUNT] = { +1, +1, +1, +1 };
+static const int8_t motor_dir[MOTOR_COUNT] = { -1, -1, -1, -1 };
 
 void motor_init(void) {
     for (int i = 0; i < MOTOR_COUNT; i++) {
