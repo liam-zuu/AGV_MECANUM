@@ -4,6 +4,7 @@
 #include "kinematics.h"
 #include "pid.h"
 #include "adrc.h"
+#include <stdint.h>
 
 // ─────────────────────────────────────────
 // Vòng vận tốc thân — bước 8–10 của control_task (main.c):
@@ -23,6 +24,12 @@ typedef struct {
     agv_velocity_t actual;     // vận tốc thân tính từ encoder (FK)
     agv_velocity_t ctrl_out;   // lệnh vận tốc thân, trước IK
     int            pwm[4];     // FL, FR, RL, RR (-PWM_MAX..PWM_MAX)
+
+    // Bộ đếm cộng dồn cho metric (spec S02): log mất mẫu vẫn tính đúng,
+    // khoảng trống trong tick cho biết số mẫu mất. Reset ở init / set_mode.
+    uint32_t       tick;          // số lần gọi vel_ctrl_step
+    uint32_t       dpwm_sum[4];   // Σ|pwm_k − pwm_{k−1}| (đơn vị pwm, chia PWM_MAX ra u)
+    uint32_t       sat_ticks[4];  // số tick có |pwm| ≥ PWM_MAX
 } vel_ctrl_out_t;
 
 void               vel_ctrl_init(void);              // khởi tạo cả PID và ADRC, chế độ = CTRL_MODE

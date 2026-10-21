@@ -85,14 +85,15 @@ void logger_task(void *pv) {
         "pwm_fl,pwm_fr,pwm_rl,pwm_rr,"
         "ax,ay,az,"
         "gx,gy,gz,"
-        "yaw,pitch,roll\n";
+        "yaw,pitch,roll,"
+        "tick,dpwm_fl,dpwm_fr,dpwm_rl,dpwm_rr,sat_fl,sat_fr,sat_rl,sat_rr\n";
     sendto(sock, header, strlen(header), 0,
            (struct sockaddr *)&dest_addr, sizeof(dest_addr));
 
     ESP_LOGI(TAG, "Logger streaming → %s:%d", LOGGER_PC_IP, LOGGER_UDP_PORT);
 
     log_data_t data;
-    char buf[320];
+    char buf[448];
 
     while (1) {
         // Block cho đến khi có data — không busy-wait
@@ -108,7 +109,8 @@ void logger_task(void *pv) {
             "%d,%d,%d,%d,"
             "%.3f,%.3f,%.3f,"
             "%.3f,%.3f,%.3f,"
-            "%.2f,%.2f,%.2f\n",
+            "%.2f,%.2f,%.2f,"
+            "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n",
             data.timestamp_us,
             data.fl_count, data.fr_count, data.rl_count, data.rr_count,
             data.fl_rpm,   data.fr_rpm,   data.rl_rpm,   data.rr_rpm,
@@ -117,7 +119,12 @@ void logger_task(void *pv) {
             data.pwm_fl, data.pwm_fr, data.pwm_rl, data.pwm_rr,
             data.ax, data.ay, data.az,
             data.gx, data.gy, data.gz,
-            data.yaw, data.pitch, data.roll
+            data.yaw, data.pitch, data.roll,
+            (unsigned long)data.tick,
+            (unsigned long)data.dpwm_fl, (unsigned long)data.dpwm_fr,
+            (unsigned long)data.dpwm_rl, (unsigned long)data.dpwm_rr,
+            (unsigned long)data.sat_fl,  (unsigned long)data.sat_fr,
+            (unsigned long)data.sat_rl,  (unsigned long)data.sat_rr
         );
 
         if (len > 0 && len < (int)sizeof(buf)) {

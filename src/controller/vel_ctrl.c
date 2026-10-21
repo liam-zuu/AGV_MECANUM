@@ -1,19 +1,33 @@
 #include "vel_ctrl.h"
+#include "motor.h"      // PWM_MAX
 
 static pid_controller_t  g_pid;
 static adrc_controller_t g_adrc;
 static int               g_mode = CTRL_MODE;
 
+// Bộ đếm metric (xem vel_ctrl.h)
+static uint32_t g_tick;
+static uint32_t g_dpwm_sum[4];
+static uint32_t g_sat_ticks[4];
+static int      g_pwm_prev[4];
+
+static void counters_reset(void) {
+    g_tick = 0;
+    for (int i = 0; i < 4; i++) { g_dpwm_sum[i] = 0; g_sat_ticks[i] = 0; g_pwm_prev[i] = 0; }
+}
+
 void vel_ctrl_init(void) {
     pid_init(&g_pid);
     adrc_init(&g_adrc);
     g_mode = CTRL_MODE;
+    counters_reset();
 }
 
 void vel_ctrl_set_mode(int mode) {
     g_mode = (mode == CTRL_ADRC) ? CTRL_ADRC : CTRL_PID;
     pid_reset(&g_pid);
     adrc_reset(&g_adrc);
+    counters_reset();
 }
 
 int                vel_ctrl_mode(void) { return g_mode; }
@@ -49,6 +63,18 @@ vel_ctrl_out_t vel_ctrl_step(agv_velocity_t vel, const float enc_rpm[4], float d
     o.pwm[1] = kinematics_radps_to_pwm(wheels.fr);
     o.pwm[2] = kinematics_radps_to_pwm(wheels.rl);
     o.pwm[3] = kinematics_radps_to_pwm(wheels.rr);
+
+    // ── Bộ đếm metric ─────────────────────────────────────────────────────
+    g_tick++;
+    for (int i = 0; i < 4; i++) {
+        int d = o.pwm[i] - g_pwm_prev[i];
+        g_dpwm_sum[i] += (uint32_t)(d < 0 ? -d : d);
+        if (o.pwm[i] >= PWM_MAX || o.pwm[i] <= -PWM_MAX) g_sat_ticks[i]++;
+        g_pwm_prev[i] = o.pwm[i];
+        o.dpwm_sum[i]  = g_dpwm_sum[i];
+        o.sat_ticks[i] = g_sat_ticks[i];
+    }
+    o.tick = g_tick;
 
     return o;
 }

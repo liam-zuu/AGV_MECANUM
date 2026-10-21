@@ -448,6 +448,11 @@ static void control_task(void *pv) {
             .yaw      = g_imu_data.yaw,
             .pitch    = g_imu_data.pitch,
             .roll     = g_imu_data.roll,
+            .tick     = vc.tick,
+            .dpwm_fl  = vc.dpwm_sum[0], .dpwm_fr = vc.dpwm_sum[1],
+            .dpwm_rl  = vc.dpwm_sum[2], .dpwm_rr = vc.dpwm_sum[3],
+            .sat_fl   = vc.sat_ticks[0], .sat_fr = vc.sat_ticks[1],
+            .sat_rl   = vc.sat_ticks[2], .sat_rr = vc.sat_ticks[3],
         };
         logger_push(&logdata);
     }

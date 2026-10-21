@@ -38,6 +38,11 @@ typedef struct {
 
     // IMU — euler (degrees)
     float yaw, pitch, roll;
+
+    // Bộ đếm cộng dồn của vel_ctrl (spec S02): tick, Σ|Δpwm|, số tick bão hòa
+    uint32_t tick;
+    uint32_t dpwm_fl, dpwm_fr, dpwm_rl, dpwm_rr;
+    uint32_t sat_fl,  sat_fr,  sat_rl,  sat_rr;
 } log_data_t;
 
 // ─────────────────────────────────────────
