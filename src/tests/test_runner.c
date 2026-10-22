@@ -42,6 +42,9 @@
 #ifdef TEST_ENC_COUNT
 #include "test_enc_count.h"
 #endif
+#ifdef TEST_PWM_HOLD
+#include "test_pwm_hold.h"
+#endif
 
 void run_tests(void) {
 #ifdef TEST_MOTOR
@@ -72,5 +75,7 @@ void run_tests(void) {
     test_imu_log();
 #elif defined(TEST_ENC_COUNT)
     test_enc_count();
+#elif defined(TEST_PWM_HOLD)
+    test_pwm_hold();
 #endif
 }
