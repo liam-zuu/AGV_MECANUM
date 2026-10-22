@@ -18,15 +18,22 @@
 // Compare channel-A frequency with |omega| / (2*pi) * 330 for the commanded omega:
 // it does not depend on any H7 formula. Motors are disabled (EN = 0).
 // IMU is initialised too (every firmware has the IMU, Outline V7.4 QD 23); its gyro
-// report count is printed so a missing IMU is visible.
+// report count is printed so a missing IMU is visible. imu_init runs in its own task:
+// on the bench ESP32 (no BNO085 until the H7 emulates it) the library can block forever
+// in getProdIds (bug ESP-BNOLIB-D), and the encoder count must not wait for it.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #define EC_WINDOW_US 10000000LL
 
+static void imu_init_task(void *pv) {
+    imu_init();
+    vTaskDelete(NULL);
+}
+
 void test_enc_count(void) {
     motor_init();                         /* EN = 0: drivers off during the test */
     encoder_init();
-    imu_init();
+    xTaskCreate(imu_init_task, "imu_init", 4096, NULL, 3, NULL);
     printf("ENC COUNT READY v1 window_s=%.1f ppr=%d\n", EC_WINDOW_US / 1e6, PPR);
 
     static const char *name[ENC_COUNT] = {"FL", "FR", "RL", "RR"};
