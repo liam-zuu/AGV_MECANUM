@@ -57,7 +57,8 @@ Vòng điều khiển 100 Hz giữ mẫu gần nhất của từng report (zero-
 ### 4.3. Chuyển nguồn wz không giật (Codex 10, K5)
 
 - Mất hợp lệ → chuyển **ngay** sang encoder. Có lại → chỉ quay về IMU sau khi gyro hợp lệ liên tục `T_back` [ĐỀ XUẤT: 3 mẫu gyro mới].
-- Lúc chuyển, phép đo nhảy một bước `Δ = wz_mới − wz_cũ`, làm khâu P (và sai số ESO của LADRC) nhảy theo. **Đề xuất:** bù bước đó bằng offset tắt dần: `wz_meas = wz_src_mới − Δ·e^{−t/τ_b}` [ĐỀ XUẤT: `τ_b` = 0,1 s]. Ở trạng thái xác lập offset về 0, nên không trái quyết định "không trộn" (1.2). *Cần Liam xác nhận cách này.* Phương án thay thế: không bù, chấp nhận bước nhảy, chỉ đo.
+- Lúc chuyển, phép đo nhảy một bước `Δ = wz_mới − wz_cũ`, làm khâu P (và sai số ESO của LADRC) nhảy theo.
+- **Liam quyết 22/10 (nói ở phiên THESIS): KHÔNG bù, chỉ đo.** Mỗi lần chuyển nguồn ghi log (thời điểm, chiều chuyển, `Δ`) và đo bước PWM theo tiêu chí §10. Chỉ thêm bù khi đo trên fwsim/HIL thấy bước PWM vượt ngưỡng đã khóa. Lý do: lúc chuyển là lúc gyro vừa bị loại vì có thể sai, mà offset lại giữ giá trị của nó; bù còn thêm trường hợp phải xử lý và trái "không trộn" (1.2). *(Đề xuất v1 "offset tắt dần `Δ·e^{−t/τ_b}`" [ĐÃ THAY 22/10 bởi quyết định này].)*
 - Tích phân PID và trạng thái ESO **giữ nguyên** khi chuyển.
 
 ### 4.4. Bias gyro khi đứng yên (Codex 12)
@@ -160,7 +161,8 @@ fwsim cần mô hình IMU dùng chung với plant HIL: gz, yaw, ax, ay, az từ 
 
 ## 11. Còn mở
 
-- Cách chuyển nguồn có bù bước tắt dần (4.3): chờ Liam xác nhận.
+- ~~Cách chuyển nguồn có bù bước tắt dần (4.3)~~: Liam quyết 22/10 không bù, chỉ đo (xem 4.3).
+- Các mục review Codex vòng 2 (`01_THESIS/review/2026-10-22_Review_spec_controller_IMU_vong2.md`) đưa vào v2: `v_true` fwsim, luật chọn tần số (thứ nguyên), dừng độc lập cho ca A–B, sự kiện reset chip, dải gia tốc ±8 g, cận số G3/G4, đếm mất log, `imu_seq`.
 - Mọi ngưỡng [ĐỀ XUẤT]: chờ số đo nhiễu IMU 20/100 Hz (env `imu_log_20`, `imu_log_100`; checklist Ưu tiên 1c).
 - Tần số IMU: theo thí nghiệm mục 10.
 - Mô hình trượt bánh–thân trong plant (QĐ 25): kế hoạch riêng.
