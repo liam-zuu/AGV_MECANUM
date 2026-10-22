@@ -4,6 +4,7 @@
 #include "freertos/semphr.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 static const char *TAG = "IMU";
 
@@ -13,12 +14,15 @@ static const char *TAG = "IMU";
 #define IMU_CLK     GPIO_NUM_12
 #define IMU_CS      GPIO_NUM_10
 #define IMU_INT     GPIO_NUM_14
-#define IMU_RST     GPIO_NUM_1    // share với buzzer — thư viện dùng để hard reset BNO085
+#define IMU_RST     GPIO_NUM_1    // reset BNO085 (buzzer là GPIO17, không dùng chung)
 
 // ─── Globals ──────────────────────────────────────────────────────────────────
 static BNO08x          *g_imu       = nullptr;
 static SemaphoreHandle_t g_mutex    = nullptr;
 static imu_data_t        g_data     = {};
+static volatile imu_report_hook_t g_hook = nullptr;
+
+extern "C" void imu_set_report_hook(imu_report_hook_t hook) { g_hook = hook; }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 extern "C" void imu_init(void) {
@@ -42,43 +46,57 @@ extern "C" void imu_init(void) {
         return;
     }
 
-    // Enable các report cần dùng
-    // 50ms interval = 20Hz — đủ cho AGV
-    g_imu->rpt.accelerometer.enable(50000UL);   // accelerometer (m/s²)
-    g_imu->rpt.cal_gyro.enable(50000UL);        // gyro calibrated (rad/s) — heading control
-    g_imu->rpt.rv_game.enable(50000UL);         // game rotation vector → euler angles
+    // Enable các report cần dùng, cùng chu kỳ IMU_REPORT_PERIOD_US
+    g_imu->rpt.accelerometer.enable(IMU_REPORT_PERIOD_US);   // accelerometer (m/s²)
+    g_imu->rpt.cal_gyro.enable(IMU_REPORT_PERIOD_US);        // gyro calibrated (rad/s) — heading control
+    g_imu->rpt.rv_game.enable(IMU_REPORT_PERIOD_US);         // game rotation vector → euler angles
 
-    // Callback: cập nhật từng field riêng lẻ — KHÔNG zero out toàn bộ g_data
-    // Vì mỗi report có rate riêng, callback fire nhiều lần, mỗi lần chỉ có 1 report có data mới
+    // Callback chạy trong task callback của thư viện, mỗi lần đúng một report (rpt_id).
+    // Chỉ cập nhật field của report đó và ghi thời điểm nhận phía host.
     g_imu->register_cb([](uint8_t rpt_id) {
-        if (xSemaphoreTakeFromISR(g_mutex, nullptr) != pdTRUE) return;
+        int64_t t_us = esp_timer_get_time();
+        float v[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        uint32_t n = 0;
 
-        if (g_imu->rpt.accelerometer.has_new_data()) {
+        if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(5)) != pdTRUE) return;
+
+        if (rpt_id == IMU_RPT_ACCEL) {
             auto a = g_imu->rpt.accelerometer.get();
             g_data.accel_x = a.x;
             g_data.accel_y = a.y;
             g_data.accel_z = a.z;
-        }
-
-        if (g_imu->rpt.cal_gyro.has_new_data()) {
+            g_data.accel_t_us = t_us;
+            n = ++g_data.accel_n;
+            v[0] = a.x; v[1] = a.y; v[2] = a.z;
+        } else if (rpt_id == IMU_RPT_GYRO) {
             auto g = g_imu->rpt.cal_gyro.get();
             g_data.gyro_x = g.x;
             g_data.gyro_y = g.y;
             g_data.gyro_z = g.z;   // wz — dùng cho heading control
-        }
-
-        if (g_imu->rpt.rv_game.has_new_data()) {
+            g_data.gyro_t_us = t_us;
+            n = ++g_data.gyro_n;
+            v[0] = g.x; v[1] = g.y; v[2] = g.z;
+        } else if (rpt_id == IMU_RPT_GAME_RV) {
             auto e = g_imu->rpt.rv_game.get_euler();
             g_data.roll  = e.x;
             g_data.pitch = e.y;
             g_data.yaw   = e.z;
+            g_data.rv_t_us = t_us;
+            n = ++g_data.rv_n;
+            v[0] = e.x; v[1] = e.y; v[2] = e.z;
+        } else {
+            xSemaphoreGive(g_mutex);
+            return;   // report khác (hoặc id 0 lúc task khởi động): bỏ qua
         }
 
         g_data.valid = true;
-        xSemaphoreGiveFromISR(g_mutex, nullptr);
+        xSemaphoreGive(g_mutex);
+
+        imu_report_hook_t hook = g_hook;
+        if (hook) hook(rpt_id, t_us, n, v);
     });
 
-    ESP_LOGI(TAG, "BNO085 init OK — accel/gyro/euler @ 20Hz");
+    ESP_LOGI(TAG, "BNO085 init OK — accel/gyro/euler @ %lu us", (unsigned long)IMU_REPORT_PERIOD_US);
 }
 
 // ─── Thread-safe getter ───────────────────────────────────────────────────────
