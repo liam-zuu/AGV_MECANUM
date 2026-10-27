@@ -1,0 +1,6 @@
+- **Sửa #2 xuống Trung bình:** giữ lỗi fwsim thiếu đường khởi tạo thất bại; chưa có bằng chứng làm sai số liệu chính để giữ mức Nghiêm trọng.
+- Claude đúng: `good_run` đếm tick thấy mẫu mới, không cộng số report đã nhận trước `vel_ctrl_init()`.
+- Tuy nhiên, lượt khỏe vẫn khác về dữ liệu ban đầu: firmware có gyro/RV ngay tick đầu; fwsim chưa có report đến 50 ms. Điều này ảnh hưởng thời điểm bật vòng hướng và chuyển nguồn, dù cùng cần ba lần thấy gyro mới.
+- Khẳng định firmware đã qua `T_settle` chưa được chứng minh: phải tính từ `reset_t_us` đến tick điều khiển đầu; nhận đủ ba report không tự bảo đảm đủ 500 ms.
+- **Sửa #10:** nếu cấu hình tick 100 Hz đúng và không lỡ deadline, lập luận `vTaskDelay(1)` thức ở tick kế tiếp là đúng; rút nhận xét chu kỳ luôn bằng “10 ms + thời gian xử lý”.
+- Phần còn cần kiểm ở #10 là tổng tải, chặn và vượt deadline thực tế; không nên mặc định encoder/controller lệch pha.
