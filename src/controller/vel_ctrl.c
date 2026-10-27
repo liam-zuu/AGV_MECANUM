@@ -4,6 +4,8 @@
 static pid_controller_t  g_pid;
 static adrc_controller_t g_adrc;
 static int               g_mode = CTRL_MODE;
+static bool              g_mode_event;      // đổi mode chờ báo cho vòng hướng (§5 ưu tiên 1)
+static bool              g_pwm_zero = true; // PWM = 0 cả 4 bánh ở tick trước (điều kiện đứng yên)
 
 // Bộ đếm metric (xem vel_ctrl.h)
 static uint32_t g_tick;
@@ -19,7 +21,11 @@ static void counters_reset(void) {
 void vel_ctrl_init(void) {
     pid_init(&g_pid);
     adrc_init(&g_adrc);
+    imu_fusion_init(NULL);
+    heading_init(NULL);
     g_mode = CTRL_MODE;
+    g_mode_event = false;
+    g_pwm_zero = true;
     counters_reset();
 }
 
@@ -27,6 +33,7 @@ void vel_ctrl_set_mode(int mode) {
     g_mode = (mode == CTRL_ADRC) ? CTRL_ADRC : CTRL_PID;
     pid_reset(&g_pid);
     adrc_reset(&g_adrc);
+    g_mode_event = true;
     counters_reset();
 }
 
@@ -34,27 +41,63 @@ int                vel_ctrl_mode(void) { return g_mode; }
 pid_controller_t  *vel_ctrl_pid(void)  { return &g_pid; }
 adrc_controller_t *vel_ctrl_adrc(void) { return &g_adrc; }
 
-vel_ctrl_out_t vel_ctrl_step(agv_velocity_t vel, const float enc_rpm[4], float dt) {
+vel_ctrl_out_t vel_ctrl_step(const vel_ctrl_in_t *in) {
     vel_ctrl_out_t o = {0};
+    agv_velocity_t vel = in->sp;
+    float dt = in->dt;
 
     // ── 8. Forward kinematics → actual velocity ───────────────────────────
     wheel_velocity_t enc_wheels = {
-        .fl = enc_rpm[0] * 2.0f * 3.14159f / 60.0f,
-        .fr = enc_rpm[1] * 2.0f * 3.14159f / 60.0f,
-        .rl = enc_rpm[2] * 2.0f * 3.14159f / 60.0f,
-        .rr = enc_rpm[3] * 2.0f * 3.14159f / 60.0f,
+        .fl = in->enc_rpm[0] * 2.0f * 3.14159f / 60.0f,
+        .fr = in->enc_rpm[1] * 2.0f * 3.14159f / 60.0f,
+        .rl = in->enc_rpm[2] * 2.0f * 3.14159f / 60.0f,
+        .rr = in->enc_rpm[3] * 2.0f * 3.14159f / 60.0f,
     };
     o.actual = kinematics_forward(enc_wheels);
 
+    // ── 8b. Hợp nhất IMU: nguồn wz, hợp lệ, cờ trượt, bias (imu_fusion.c) ──
+    imu_fusion_in_t fi = {
+        .now_us        = in->now_us,
+        .imu           = in->imu,
+        .wz_enc        = o.actual.wz,
+        .omega         = { enc_wheels.fl, enc_wheels.fr, enc_wheels.rl, enc_wheels.rr },
+        .sp_zero       = vel.vx == 0.0f && vel.vy == 0.0f && vel.wz == 0.0f,
+        .drive_off     = !in->motor_on || g_pwm_zero,
+        .wheels_lifted = in->wheels_lifted,
+    };
+    for (int i = 0; i < 4; i++) fi.enc_count[i] = in->enc_count[i];
+    imu_fusion_step(&fi, &o.imu);
+
+    // ── 8c. Vòng giữ hướng (heading.c) ───────────────────────────────────
+    heading_in_t hi = {
+        .wz_ref      = vel.wz,
+        .dt          = dt,
+        .run_active  = in->run_active,
+        .yaw_valid   = o.imu.r_valid,
+        .yaw         = o.imu.yaw,
+        .reset_event = o.imu.reset_event || g_mode_event,
+    };
+    g_mode_event = false;
+    heading_step(&hi, &o.head);
+    o.wz_cmd = o.head.wz_cmd;
+
+    if (!in->motor_on) {
+        g_pwm_zero = true;
+        o.tick = g_tick;
+        for (int i = 0; i < 4; i++) { o.dpwm_sum[i] = g_dpwm_sum[i]; o.sat_ticks[i] = g_sat_ticks[i]; }
+        return o;
+    }
+
     // ── 9. Controller ─────────────────────────────────────────────────────
+    float wz_meas = o.imu.wz_meas;
     if (g_mode == CTRL_ADRC) {
         o.ctrl_out.vx = adrc_update_vx(&g_adrc, vel.vx, o.actual.vx, dt);
         o.ctrl_out.vy = adrc_update_vy(&g_adrc, vel.vy, o.actual.vy, dt);
-        o.ctrl_out.wz = adrc_update_wz(&g_adrc, vel.wz, o.actual.wz, dt);
+        o.ctrl_out.wz = adrc_update_wz(&g_adrc, o.wz_cmd, wz_meas, dt);
     } else {
         o.ctrl_out.vx = vel.vx + pid_update_vx(&g_pid, vel.vx, o.actual.vx, dt);
         o.ctrl_out.vy = vel.vy + pid_update_vy(&g_pid, vel.vy, o.actual.vy, dt);
-        o.ctrl_out.wz = vel.wz + pid_update_wz(&g_pid, vel.wz, o.actual.wz, dt);
+        o.ctrl_out.wz = o.wz_cmd + pid_update_wz(&g_pid, o.wz_cmd, wz_meas, dt);
     }
 
     // ── 10. Inverse kinematics → PWM ─────────────────────────────────────
@@ -63,6 +106,7 @@ vel_ctrl_out_t vel_ctrl_step(agv_velocity_t vel, const float enc_rpm[4], float d
     o.pwm[1] = kinematics_radps_to_pwm(wheels.fr);
     o.pwm[2] = kinematics_radps_to_pwm(wheels.rl);
     o.pwm[3] = kinematics_radps_to_pwm(wheels.rr);
+    g_pwm_zero = o.pwm[0] == 0 && o.pwm[1] == 0 && o.pwm[2] == 0 && o.pwm[3] == 0;
 
     // ── Bộ đếm metric ─────────────────────────────────────────────────────
     g_tick++;

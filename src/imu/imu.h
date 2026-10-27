@@ -33,6 +33,11 @@ typedef struct {
     // nên đây là mốc phía host.
     int64_t  accel_t_us, gyro_t_us, rv_t_us;
     uint32_t accel_n,    gyro_n,    rv_n;
+
+    // Số lần chip báo SH2_RESET từ lúc khởi động và thời điểm lần gần nhất (spec
+    // controller–IMU v2 §3, §4.1). Chip cũng báo reset một lần lúc khởi động.
+    uint32_t reset_n;
+    int64_t  reset_t_us;
 } imu_data_t;
 
 // Hook gọi mỗi report (trong task callback của thư viện, không phải ngắt).

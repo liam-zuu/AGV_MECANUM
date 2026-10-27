@@ -54,7 +54,6 @@ static volatile int64_t        g_last_traj_us    = 0;
 static volatile traj_setpoint_t g_setpoint        = {0};
 static volatile float            g_enc_rpm[4]     = {0};
 static volatile int32_t          g_enc_count[4]   = {0};
-static volatile imu_data_t       g_imu_data       = {0};
 static volatile us_data_t        g_us_data        = {0};
 static SemaphoreHandle_t         g_us_mutex;
 
@@ -207,25 +206,16 @@ static void encoder_task(void *pv) {
 }
 
 // ─────────────────────────────────────────
-// CORE 1 - imu_task (priority 6)
-// ─────────────────────────────────────────
-static void imu_task(void *pv) {
-    imu_data_t data;
-    while (1) {
-        if (imu_get(&data)) {
-            g_imu_data = data;
-        }
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-}
-
-// ─────────────────────────────────────────
 // CORE 1 - control_task (priority 5)
 // ─────────────────────────────────────────
+// IMU: control_task tự copy imu_get() mỗi tick (có mutex), thay cho imu_task cũ
+// (bản sao volatile cũ có thể bị đọc lệch giữa chừng khi imu_task ưu tiên cao hơn chen vào).
 static void control_task(void *pv) {
     const float dt = 0.01f;
     int64_t t_prev = esp_timer_get_time();
     bool    swa_prev = false;
+    static imu_data_t s_imu;
+    bool    have_imu = false;
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
@@ -352,12 +342,8 @@ static void control_task(void *pv) {
             }
         }
 
-        // ── 6. Motor off ──────────────────────────────────────────────────────
-        if (!g_motor_enabled) {
-            motor_stop_all();
-            traj_receiver_send_status(0, 0, 0);
-            continue;
-        }
+        // ── 6. Motor off: xử lý sau bước 8–10 (vel_ctrl_step chạy mỗi tick để
+        //       theo dõi hợp lệ IMU, bias khi đứng yên; spec controller–IMU v2.2 §9)
 
         // ── 7. Setpoint theo mode ─────────────────────────────────────────────
         agv_velocity_t vel = {0};
@@ -394,10 +380,33 @@ static void control_task(void *pv) {
         if (s_left_blocked  && vel.vy > 0.0f) vel.vy = 0.0f;
         if (s_right_blocked && vel.vy < 0.0f) vel.vy = 0.0f;
 
-        // ── 8–10. FK → controller → IK → PWM (controller/vel_ctrl.c) ─────────
-        float enc_rpm[4] = { g_enc_rpm[ENC_FL], g_enc_rpm[ENC_FR],
-                             g_enc_rpm[ENC_RL], g_enc_rpm[ENC_RR] };
-        vel_ctrl_out_t vc = vel_ctrl_step(vel, enc_rpm, dt_actual);
+        // ── 8–10. FK → hợp nhất IMU + giữ hướng → controller → IK → PWM ─────
+        //         (controller/vel_ctrl.c, imu_fusion.c, heading.c)
+        if (imu_get(&s_imu)) have_imu = true;
+        vel_ctrl_in_t vin = {
+            .sp         = vel,
+            .enc_rpm    = { g_enc_rpm[ENC_FL], g_enc_rpm[ENC_FR],
+                            g_enc_rpm[ENC_RL], g_enc_rpm[ENC_RR] },
+            .enc_count  = { g_enc_count[ENC_FL], g_enc_count[ENC_FR],
+                            g_enc_count[ENC_RL], g_enc_count[ENC_RR] },
+            .imu        = have_imu ? &s_imu : NULL,
+            .now_us     = t_now,
+            .dt         = dt_actual,
+            .motor_on   = g_motor_enabled,
+            .run_active = g_motor_enabled && g_mode == MODE_AUTO && traj_fresh,
+#ifdef RUN_WHEELS_LIFTED
+            .wheels_lifted = true,
+#else
+            .wheels_lifted = false,
+#endif
+        };
+        vel_ctrl_out_t vc = vel_ctrl_step(&vin);
+
+        if (!g_motor_enabled) {
+            motor_stop_all();
+            traj_receiver_send_status(0, 0, 0);
+            continue;
+        }
         agv_velocity_t actual_vel = vc.actual;
         int pwm_fl = vc.pwm[0];
         int pwm_fr = vc.pwm[1];
@@ -442,15 +451,15 @@ static void control_task(void *pv) {
             .pwm_fr   = pwm_fr,
             .pwm_rl   = pwm_rl,
             .pwm_rr   = pwm_rr,
-            .ax       = g_imu_data.accel_x,
-            .ay       = g_imu_data.accel_y,
-            .az       = g_imu_data.accel_z,
-            .gx       = g_imu_data.gyro_x,
-            .gy       = g_imu_data.gyro_y,
-            .gz       = g_imu_data.gyro_z,
-            .yaw      = g_imu_data.yaw,
-            .pitch    = g_imu_data.pitch,
-            .roll     = g_imu_data.roll,
+            .ax       = s_imu.accel_x,
+            .ay       = s_imu.accel_y,
+            .az       = s_imu.accel_z,
+            .gx       = s_imu.gyro_x,
+            .gy       = s_imu.gyro_y,
+            .gz       = s_imu.gyro_z,
+            .yaw      = s_imu.yaw,
+            .pitch    = s_imu.pitch,
+            .roll     = s_imu.roll,
             .tick     = vc.tick,
             .dpwm_fl  = vc.dpwm_sum[0], .dpwm_fr = vc.dpwm_sum[1],
             .dpwm_rl  = vc.dpwm_sum[2], .dpwm_rr = vc.dpwm_sum[3],
@@ -508,7 +517,6 @@ void app_main(void) {
     xTaskCreatePinnedToCore(ultrasonic_task, "ultrasonic", 4096, NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(logger_task,     "logger",     4096, NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(encoder_task,    "encoder",    4096, NULL, 6, NULL, 1);
-    xTaskCreatePinnedToCore(imu_task,        "imu",        4096, NULL, 6, NULL, 1);
     xTaskCreatePinnedToCore(control_task,    "control",    4096, NULL, 5, NULL, 1);
 
     ESP_LOGI(TAG, "All tasks started");

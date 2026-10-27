@@ -43,7 +43,7 @@
 
 | Chỗ | Vấn đề | Trạng thái |
 |---|---|---|
-| `controller/vel_ctrl.c` | wz đo lấy từ encoder; IMU không tham gia | Chờ làm |
+| `controller/vel_ctrl.c` | wz đo lấy từ encoder; IMU không tham gia | **28/10 đã làm (nhánh `ctrl-imu`, đợt 1):** `imu_fusion.c` (§4, §6), `heading.c` (§5), `vel_ctrl_step` nhận `vel_ctrl_in_t` và gọi mỗi tick kể cả khi motor tắt; kiểm trên fwsim (`hil-framework` nhánh `ctrl-imu`, `fwsim/tests/test_fwsim_imu.py`); biên dịch ESP32, **chưa nạp** |
 | `imu/imu.cpp:69-96` | Thời điểm `esp_timer` + bộ đếm 32 bit mỗi report, hook cho log | Đã có (22/10) |
 | `imu/imu.cpp`, `main.c` | Khởi tạo lỗi chỉ in log rồi chạy tiếp | Chờ làm (§7) |
 | `BNO08xSH2HAL.cpp:143` | Sự kiện `SH2_RESET` của chip chỉ đặt bit nội bộ cho thư viện bật lại report; ứng dụng không biết chip đã reset | Chờ làm (§4.1) |
@@ -257,3 +257,15 @@ Mỗi metric so với ngưỡng **cùng thứ nguyên**: `δ_wz` = 1/512 rad/s (
 - ~~THESIS kiểm lại §6.1 và §10~~ **[XONG 27/10]:** O2 lượt 2 (`01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md`); v2.1 đã sửa V1, V3–V6, V9, V11–V14.
 - ~~Chờ Liam: V2, V7, V8, V10~~ **[XONG 27/10, v2.2]:** Liam chốt 27/10 ở phiên THESIS (Liam: "tôi nghiêng theo bạn đấy, chốt 4 V đó cho tôi đi"; `01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md` mục "Kết quả", repo gốc `d580a05`): V2 (a) bơm ở đầu vào gyro; V7 có (X3 đối chiếu A, đo μ_hd mặt trơn); V8 (a) bơm C vào claim C7; V10 (b) δ theo mục tiêu nhiệm vụ, lối thoát độ phân giải.
 - `PWM_X12`, `T_X12` (V6): Liam duyệt khi viết env đo X1–X2.
+
+## 13. Cách hiểu khi code đợt 1 (CODE 28/10, nhánh `ctrl-imu`; chỗ spec chưa nói rõ, chờ Liam/THESIS xem)
+
+1. **Cờ trượt khi không xét được** (gyro không hợp lệ hoặc bánh dưới `ω_min`): cờ đang bật thì tắt sau `T_slip`; timer bật đặt lại. Spec §6 chỉ nói "chỉ xét khi…".
+2. **Vòng hướng chỉ chạy ở MODE_AUTO** (`run_active` = motor enable + AUTO + quỹ đạo còn mới, `main.c`); MANUAL: tắt vòng hướng, wz vẫn lấy từ IMU khi hợp lệ.
+3. **`k_ψ` khởi đầu = 1,0 1/s** (giá trị khởi đầu, chưa tune; spec chỉ ghi "vào miền GA").
+4. **"Lọc chậm" của bias:** mỗi cửa sổ `T_still` đạt, bias tiến về trung bình gz của cửa sổ một bước không quá `b_step` (bộ giới hạn tốc độ).
+5. **σ chưa đo nên đặt 0:** bias không bao giờ cập nhật; `r_th` = 4 × 0,0196 = 0,078 rad/s (chỉ còn phần lượng tử). Đặt σ sau K1 (`imu_fusion_params()`, fwsim `fw_params`).
+6. **`ΔPWM_min` = 20** (2 % PWM_MAX) dùng tạm trong test fwsim; chưa khóa (QĐ 21).
+7. **Đếm `psi_reset`:** cộng 1 ngay lúc có sự kiện reset chip / đổi mode khi đang chạy (ưu tiên 1), và lúc đặt lại `ψ_ref` (ưu tiên 4).
+8. **Reset chip lúc khởi động** (`reset_n` ở lần đọc đầu) là mốc, không phải sự kiện; `T_settle` vẫn tính từ đó.
+9. **Đọc IMU trong `control_task`:** gọi thẳng `imu_get()` (có mutex) mỗi tick; bỏ `imu_task` vì bản sao `volatile` cũ có thể bị đọc lệch khi task ưu tiên cao chen vào giữa lúc sao chép.
