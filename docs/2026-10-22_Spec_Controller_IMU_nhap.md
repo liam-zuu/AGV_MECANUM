@@ -1,3 +1,5 @@
+> **[ĐÃ THAY 27/10 bởi v2: `docs/2026-10-27_Spec_Controller_IMU_v2.md`]** Giữ bản này để tra (các file review 22/10 trỏ tới đây).
+
 # Spec controller–IMU (nháp v1, chờ Liam duyệt; THESIS kiểm theo O2)
 
 *v0 viết 22/10/2026, phiên CODE. **v1 cùng ngày** sau bảng kiểm K1–K9 của THESIS (`01_THESIS/review/2026-10-22_Kiem_spec_controller_IMU_v0.md`) và review Codex vòng 1 (`01_THESIS/review/2026-10-22_Review_spec_controller_IMU_vong1.md`, 18 mục). Outline V7.4 quyết định 3, 4, 12, 16, 21, 23, 25. Số ghi **[ĐỀ XUẤT]** chưa khóa: khóa sau khi có số đo nhiễu IMU 20/100 Hz và thí nghiệm tần số trên fwsim, trước pha đo chính (QĐ 21). Căn cứ code: `AGV_MECANUM` `a6644a5` + sửa đo nhiễu 22/10.*
