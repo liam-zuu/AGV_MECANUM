@@ -27,17 +27,23 @@ static volatile imu_report_hook_t g_hook = nullptr;
 static volatile int      g_lib_state   = 0;
 static volatile int      g_init_status = -1;
 static volatile uint32_t g_init_ms     = 0;
-// Reset chip báo lúc không lấy được mutex: cộng dồn ở lần lấy được kế tiếp
-static volatile uint32_t g_reset_pending = 0;
-static volatile int64_t  g_reset_pending_t_us = 0;
+// Reset chip báo lúc không lấy được mutex: cộng dồn ở lần lấy được kế tiếp.
+// Hai biến pending được bảo vệ bằng spinlock riêng (Codex ctrl-imu #3: ++ và = 0 đua nhau).
+static portMUX_TYPE      g_pending_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t          g_reset_pending = 0;
+static int64_t           g_reset_pending_t_us = 0;
 
 extern "C" void imu_set_report_hook(imu_report_hook_t hook) { g_hook = hook; }
 
 static void fold_pending_reset(void) {   // gọi khi đang giữ g_mutex
-    if (g_reset_pending) {
-        g_data.reset_n   += g_reset_pending;
-        g_data.reset_t_us = g_reset_pending_t_us;
-        g_reset_pending   = 0;
+    taskENTER_CRITICAL(&g_pending_mux);
+    uint32_t n    = g_reset_pending;
+    int64_t  t_us = g_reset_pending_t_us;
+    g_reset_pending = 0;
+    taskEXIT_CRITICAL(&g_pending_mux);
+    if (n) {
+        g_data.reset_n   += n;
+        g_data.reset_t_us = t_us;
     }
 }
 
@@ -50,8 +56,10 @@ extern "C" void imu_note_chip_reset(void) {
         g_data.reset_t_us = t_us;
         xSemaphoreGive(g_mutex);
     } else {
+        taskENTER_CRITICAL(&g_pending_mux);
         g_reset_pending_t_us = t_us;
         g_reset_pending++;
+        taskEXIT_CRITICAL(&g_pending_mux);
     }
 }
 
@@ -137,7 +145,9 @@ extern "C" int imu_init(void) {
     configASSERT(g_mutex);
 
     int64_t t0 = esp_timer_get_time();
-    xTaskCreate(imu_lib_init_task, "imu_init", 6144, NULL, 5, NULL);
+    // Cùng ưu tiên với task gọi (Codex ctrl-imu #4): thư viện có quay vòng không nhường CPU
+    // thì time slicing vẫn cho vòng kiểm hạn T_init bên dưới chạy.
+    xTaskCreate(imu_lib_init_task, "imu_init", 6144, NULL, uxTaskPriorityGet(NULL), NULL);
 
     int rc;
     uint32_t gyro_n = 0, rv_n = 0;

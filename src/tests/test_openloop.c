@@ -130,8 +130,11 @@ static void ol_imu_hook(uint8_t rpt_id, int64_t t_us, uint32_t n, const float v[
 
 static void send_samples(void) {
     char line[96];
+    // Chụp s_in một lần (Codex ctrl-imu #15): callback có thể vừa ghi xong một report lúc dừng,
+    // DONE imu_n và số dòng I phải bằng nhau. Mỗi phần tử < s_in đã ghi đủ trước s_in++.
+    int n_imu = s_in;
     snprintf(line, sizeof line, "DONE n=%d aborted=%d reason=%s imu_n=%d imu_overflow=%d\n",
-             s_n, s_reason != 0, REASON[s_reason], s_in, s_ioverflow ? 1 : 0);
+             s_n, s_reason != 0, REASON[s_reason], n_imu, s_ioverflow ? 1 : 0);
     out(line);
     for (int i = 0; i < s_n; i++) {
         const ol_sample_t *p = &s_buf[i];
@@ -139,7 +142,7 @@ static void send_samples(void) {
                            (unsigned long)p->t_us, (long)p->count, p->pwm, p->en);
         uart_write_bytes(OL_UART, line, len);
     }
-    for (int i = 0; i < s_in; i++) {
+    for (int i = 0; i < n_imu; i++) {
         const ol_imu_t *p = &s_ibuf[i];
         int len = snprintf(line, sizeof line, "I,%lu,%c,%.5f,%.5f,%.5f\n",
                            (unsigned long)p->t_us, p->kind, p->v[0], p->v[1], p->v[2]);

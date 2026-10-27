@@ -20,6 +20,7 @@
 | §10 | fwsim: `v_true` lấy từ trạng thái thân của plant; luật chọn tần số đúng thứ nguyên | C2-#2, #3 |
 | §10 (v2.1) | Ca "IMU hợp lệ suốt" ở μ danh định + điều kiện `r_true`; sàn tuyệt đối `ΔPWM_min`; thí nghiệm tần số là dữ liệu phát triển | V1, V9, V11 |
 | §11 (mới) | Mục thuộc giả lập H7 (G0): `imu_seq`, dải gia tốc, cận số G3/G4: trạng thái và chỗ xử lý | C2-#9, #10, #12 |
+| §4.2, §6, §8, §13.1 (28/10, Codex rà code `ctrl-imu`) | Ngưỡng bão hòa gyro 34,9 → **31,4 rad/s** (N2: 0,9 × 34,9); cờ trượt khi không xét được theo §13.1 + cột log `slip_eval` (**#8 = (c), Liam duyệt 28/10 ở phiên CODE**); thêm cột log `src_switch_dwz`, `bias_updates` (#11) | `docs/review/2026-10-28_Review_ctrl-imu_vong1.md` |
 
 ## 1. Đã chốt (Liam 22/10)
 
@@ -49,7 +50,7 @@
 | `BNO08xSH2HAL.cpp:143` | Sự kiện `SH2_RESET` của chip chỉ đặt bit nội bộ cho thư viện bật lại report; ứng dụng không biết chip đã reset | **28/10 đợt 2:** `hal_cb` gọi `imu_note_chip_reset()` (`reset_n`, `reset_t_us`); bản weak trong thư viện để link được một mình. Không ghi vào bug log M7 (thêm chức năng, không phải lỗi) |
 | `src/main.c:255` | `#define HIL_BYPASS_MOTOR_ENABLE` đặt cứng cho **mọi** env, kể cả firmware xe: gạt SWA không tắt motor | Đề xuất §7b, chờ Liam duyệt |
 | `ibus/ibus.c:86-97` | Mất byte 20 ms thì `valid = false`; dòng dừng motor khi failsafe còn TODO | Đi cùng §7b |
-| `logger/logger.c:41,90,131` | Hàng đợi không chờ, `sendto` không kiểm lỗi, không đếm | **28/10 đợt 2:** `log_seq`, `log_qdrop`, `log_send_err`, `motor_on` (dòng 10 Hz khi motor tắt), `imu_init`, 21 cột IMU/vòng hướng; dòng `#run_end` ×3 khi motor bật → tắt; PC `tools/agv_logger.py` (hil-framework `ctrl-imu`) đọc 28/37/63 cột, tách dòng `#` ra `<file>.events.txt`; `s02_metrics.py` bỏ dòng `motor_on = 0` |
+| `logger/logger.c:41,90,131` | Hàng đợi không chờ, `sendto` không kiểm lỗi, không đếm | **28/10 đợt 2:** `log_seq`, `log_qdrop`, `log_send_err`, `motor_on` (dòng 10 Hz khi motor tắt), `imu_init`, 21 cột IMU/vòng hướng; dòng `#run_end` ×3 khi motor bật → tắt; PC `tools/agv_logger.py` (hil-framework `ctrl-imu`) đọc 28/37/63 cột (63 → **66** sau sửa Codex #11, #8 cùng ngày), tách dòng `#` ra `<file>.events.txt`; `s02_metrics.py` bỏ dòng `motor_on = 0` |
 | `test_imu_log.c:67` | In `IMU READY` cả khi khởi tạo lỗi (C2-N1) | **28/10 đợt 2:** chỉ in `IMU READY v2 period_us=… init_ms=…` khi đạt, lỗi in `IMU INIT FAIL <mã> …`; `imu_capture.py`, `g2_bno_check.py` đọc được dòng mới |
 | H7 giả lập BNO085 | `hil-framework` `g2-bno-h7`: lõi + SPI4/INT/RST, RPi5 gửi IMU không nhiễu (`rpi5/imu_model.py`) | Đã biên dịch, **chưa nạp, chưa kiểm G2** |
 
@@ -79,7 +80,7 @@ Vòng điều khiển 100 Hz giữ mẫu gần nhất của từng report (zero-
 | Đã nhận ít nhất một mẫu sau lần reset gần nhất | có | có | — |
 | Tuổi mẫu | `age_g ≤ T_age` | `age_r ≤ T_age` | `T_age` = 2,5 chu kỳ report [ĐỀ XUẤT: 125 ms ở 20 Hz, 25 ms ở 100 Hz] |
 | Giá trị hữu hạn | có | có | — |
-| Không bão hòa | `|gz| < 0,9 × 2000 °/s` (34,9 rad/s) | — | dải gyro ±2000 °/s (cấu hình hiện tại; kiểm SH-2 manual khi chốt) |
+| Không bão hòa | `|gz| < 0,9 × 2000 °/s` (31,4 rad/s; ~~34,9~~ [SỬA 28/10, Codex N2: 34,9 rad/s là 2000 °/s, chưa nhân 0,9]) | — | dải gyro ±2000 °/s (cấu hình hiện tại; kiểm SH-2 manual khi chốt) |
 | Không vừa reset | đã qua `T_settle` sau `reset_t_us` | như gyro; gốc yaw đổi nên vòng hướng đặt lại `ψ0` (§5) | `T_settle` [ĐỀ XUẤT: 0,5 s] |
 
 **wz dùng IMU khi gyro hợp lệ. Vòng hướng chạy khi yaw hợp lệ.** Hai điều kiện độc lập.
@@ -130,6 +131,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 
 - `r = wz_enc − gz`, chỉ xét khi gyro hợp lệ, có mẫu mới **và bánh đang quay**: `max_i |ω_i| ≥ ω_min` [ĐỀ XUẤT: `ω_min` = 2 rad/s, khoảng 4 count mỗi tick] (C2-#14). Bánh đứng yên thì không xét (kẹt cứng: encoder và gyro đều gần 0, cờ không bật là đúng).
 - Bật cờ khi `|r| > r_th` liên tục `T_slip`; tắt khi `|r| < r_th/2` liên tục `T_slip`.
+- **Khi không xét được** (gyro không hợp lệ hoặc `max_i |ω_i| < ω_min`): cờ đang bật thì tắt sau `T_slip` liên tục không xét được; timer bật đặt lại. Log có cột **`slip_eval`** (1 = tick này xét được `r`, 0 = không), nên `slip_flag = 0` cùng `slip_eval = 0` là "không xét được", không phải "không trượt"; đếm cờ ở §6.1 (X3, X4, ca không bơm) báo kèm % tick `slip_eval = 1`. (**Liam duyệt 28/10 ở phiên CODE**, Codex `ctrl-imu` #8 phương án (c).)
 - `r_th = k_r × √(σ_gz² + q_wz²)`: `q_wz` = 0,0196 rad/s (RMS lượng tử wz encoder, `03_CODE/CLAUDE.md`), `σ_gz` từ phép đo nhiễu. [ĐỀ XUẤT: `k_r` = 4, `T_slip` = 200 ms.]
 - Cờ chỉ ghi log và báo panel/LED; **không** đổi nguồn wz, không đổi gain.
 
@@ -186,7 +188,7 @@ Hệ quả: nạp firmware xe thì phải bật SWA mới chạy motor; nạp b�
 
 ## 8. Log và metric
 
-**Cột thêm (100 Hz):** `wz_enc`, `gz`, `yaw` (rad), `age_g_ms`, `age_r_ms`, `gyro_n`, `rv_n`, `reset_n`, `g_valid`, `r_valid`, `wz_src` (0 = encoder, 1 = IMU), `psi_ref`, `e_psi`, `head_on`, `slip_flag`, `r`, `psi_reset_count`, `bias_gz`, `log_seq`, `log_qdrop`, `log_send_err`. Giữ tên cột cũ; đơn vị yaw ghi trong header log.
+**Cột thêm (100 Hz):** `wz_enc`, `gz`, `yaw` (rad), `age_g_ms`, `age_r_ms`, `gyro_n`, `rv_n`, `reset_n`, `g_valid`, `r_valid`, `wz_src` (0 = encoder, 1 = IMU), `psi_ref`, `e_psi`, `head_on`, `slip_flag`, `r`, `psi_reset_count`, `bias_gz`, `log_seq`, `log_qdrop`, `log_send_err`; thêm 28/10 ở cuối dòng: `src_switch_dwz`, `bias_updates` (Codex #11), `slip_eval` (§6, #8 (c)). Giữ tên cột cũ; đơn vị yaw ghi trong header log. Log firmware `ctrl-imu` nay 66 cột.
 
 **Metric (giữ v1):**
 - Khi điều khiển theo gyro, e_wz tính từ chính gz không còn khách quan: SIM/HIL so với giá trị thật của plant; xe thật so với camera (QĐ 7, 8). Log luôn có cả `wz_enc` lẫn `gz`.
@@ -260,7 +262,7 @@ Mỗi metric so với ngưỡng **cùng thứ nguyên**: `δ_wz` = 1/512 rad/s (
 
 ## 13. Cách hiểu khi code đợt 1 (CODE 28/10, nhánh `ctrl-imu`; chỗ spec chưa nói rõ, chờ Liam/THESIS xem)
 
-1. **Cờ trượt khi không xét được** (gyro không hợp lệ hoặc bánh dưới `ω_min`): cờ đang bật thì tắt sau `T_slip`; timer bật đặt lại. Spec §6 chỉ nói "chỉ xét khi…".
+1. **Cờ trượt khi không xét được** (gyro không hợp lệ hoặc bánh dưới `ω_min`): cờ đang bật thì tắt sau `T_slip`; timer bật đặt lại. Spec §6 chỉ nói "chỉ xét khi…". **[XONG 28/10: Liam chọn (c) ở phiên CODE, đã đưa vào §6 + cột `slip_eval`.]**
 2. **Vòng hướng chỉ chạy ở MODE_AUTO** (`run_active` = motor enable + AUTO + quỹ đạo còn mới, `main.c`); MANUAL: tắt vòng hướng, wz vẫn lấy từ IMU khi hợp lệ.
 3. **`k_ψ` khởi đầu = 1,0 1/s** (giá trị khởi đầu, chưa tune; spec chỉ ghi "vào miền GA").
 4. **"Lọc chậm" của bias:** mỗi cửa sổ `T_still` đạt, bias tiến về trung bình gz của cửa sổ một bước không quá `b_step` (bộ giới hạn tốc độ).

@@ -44,7 +44,7 @@ typedef struct {
 #define IMU_FUSION_PARAMS_DEFAULT {                     \
     .t_age_us    = (int64_t)(IMU_REPORT_PERIOD_US * 5 / 2), \
     .t_settle_us = 500000,                              \
-    .gyro_sat    = 34.9f,                               \
+    .gyro_sat    = 31.4f,                               \
     .n_back      = 3,                                   \
     .sigma_gz    = 0.0f,                                \
     .sigma_a     = 0.0f,                                \
@@ -89,6 +89,7 @@ typedef struct {
     float    r;              // wz_enc − gz ở mẫu gyro gần nhất được xét [rad/s]
     float    r_th;
     bool     slip_flag;
+    bool     slip_eval;      // tick này xét được r (gyro hợp lệ, max|ω_i| ≥ omega_min)
     uint32_t slip_on_count;  // số lần cờ bật
 
     uint32_t src_switch_count;  // số lần đổi nguồn wz

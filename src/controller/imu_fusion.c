@@ -13,7 +13,7 @@ static struct {
     uint32_t gyro_n, rv_n, accel_n, reset_n;
     bool     reset_seen;         // đã có ít nhất một sự kiện reset (kể cả lúc khởi động)
     int64_t  reset_t_us;
-    bool     gyro_bad, rv_bad;   // mẫu gần nhất không dùng được (NaN/vô cực/bão hòa)
+    bool     gyro_bad, rv_bad, accel_bad;   // mẫu gần nhất không dùng được (NaN/vô cực/bão hòa)
     float    gz_raw, yaw;        // mẫu tốt gần nhất
     int      good_run;           // số mẫu gyro tốt liên tiếp khi đang hợp lệ
     int      wz_src;
@@ -24,6 +24,7 @@ static struct {
     int      cls;
     float    r;
     bool     slip;
+    bool     slip_eval;          // tick này xét được r (gyro hợp lệ, bánh quay)
     int64_t  above_since, below_since;   // −1: chưa chạy
     uint32_t slip_on_count;
 
@@ -71,7 +72,8 @@ static void still_step(const imu_fusion_in_t *in, bool g_valid, bool gyro_new, b
     }
     S.count_prev_ok = true;
 
-    bool accel_ok = d && d->accel_n > 0 && (in->now_us - d->accel_t_us) <= P.t_age_us;
+    // Mẫu accel gần nhất NaN/vô cực thì cửa sổ đứng yên không hợp lệ (Codex ctrl-imu #7)
+    bool accel_ok = d && d->accel_n > 0 && !S.accel_bad && (in->now_us - d->accel_t_us) <= P.t_age_us;
     bool cond = P.sigma_gz > 0.0f && P.sigma_a > 0.0f && !in->wheels_lifted &&
                 in->sp_zero && in->drive_off && counts_still && g_valid && accel_ok;
 
@@ -126,7 +128,10 @@ static void slip_step(const imu_fusion_in_t *in, bool g_valid, bool gyro_new, fl
     }
     bool evaluable = g_valid && wmax >= P.omega_min;
     float r_th = P.k_r * sqrtf(P.sigma_gz * P.sigma_gz + P.q_wz * P.q_wz);
+    S.slip_eval = evaluable;
 
+    // Không xét được: cờ đang bật thì tắt sau T_slip, timer bật đặt lại (spec §6, Liam chọn
+    // Codex #8 = (c) 28/10); cột log slip_eval tách "không trượt" với "không xét được".
     if (!evaluable) {
         S.cls = CLS_NONE;
         S.above_since = -1;
@@ -201,6 +206,7 @@ void imu_fusion_step(const imu_fusion_in_t *in, imu_fusion_out_t *out) {
         if (d->accel_n != S.accel_n) {
             S.accel_n = d->accel_n;
             accel_new = isfinite(d->accel_x) && isfinite(d->accel_y) && isfinite(d->accel_z);
+            S.accel_bad = !accel_new;
         }
     }
 
@@ -257,6 +263,7 @@ void imu_fusion_step(const imu_fusion_in_t *in, imu_fusion_out_t *out) {
     out->r                = S.r;
     out->r_th             = P.k_r * sqrtf(P.sigma_gz * P.sigma_gz + P.q_wz * P.q_wz);
     out->slip_flag        = S.slip;
+    out->slip_eval        = S.slip_eval;
     out->slip_on_count    = S.slip_on_count;
     out->src_switch_count = S.switch_count;
     out->src_switch_dwz   = S.switch_dwz;

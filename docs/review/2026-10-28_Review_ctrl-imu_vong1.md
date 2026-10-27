@@ -35,3 +35,8 @@
 - A (lỗi rõ, sửa nhỏ, không đổi thiết kế): #3, #4, #7, #9, #11, #15, N1, N2, phần đồng ý của #2 (thêm đường lỗi khởi tạo và tham số `boot_reset` cho fwsim).
 - B (đổi hành vi hoặc spec, cần Liam): #1 reset bộ điều khiển khi bật motor; #6 khóa setpoint; #12 PWM thực áp; #13 tiêu chí khởi tạo; #14 câu spec §6.1; #5 `missing_pct` theo `log_seq`.
 - C (Liam quyết): #8.
+
+**Liam duyệt 28/10 ở phiên CODE `local_2d8bfc53…`:** #8 = **(c)** (như (a) + cột log `slip_eval`); cho sửa nhóm A. **Đã sửa (nhánh `ctrl-imu`, chưa nạp board):**
+- AGV: #3 spinlock `portMUX` cho pending reset (`imu.cpp`); #4 task thư viện cùng ưu tiên task gọi `imu_init()`; #7 `accel_bad` làm mất hợp lệ cửa sổ đứng yên; N2 `gyro_sat` 31,4 rad/s; #8 (c) `slip_eval` trong `imu_fusion_out_t`; #11 + #8 log thêm `src_switch_dwz`, `bias_updates`, `slip_eval` ở cuối dòng (63 → 66 cột); #15 chụp `s_in` một lần (`test_openloop.c`); spec §0, §4.2, §6, §8, §13.1.
+- hil-framework: #9 `simulate()` đặt `t_age_us` = 2,5 chu kỳ report theo `rate_hz`; #2 (phần đồng ý) `fwsim_imu_init_fail()` + `imu=dict(init_fail=True)` (motor không bao giờ bật, như `g_imu_fail` của `main.c`), `--imu-boot-reset` (đặt theo `init_ms` đo được), ABI 5, cột `slip_eval`; N1 test vòng hướng so IMU `k_psi = 0` với `k_psi = 1`; `agv_logger.py` 66 cột; 5 test mới (#9 ở 100 Hz, #7, N2, đường lỗi khởi tạo, `slip_eval`).
+- Còn chờ Liam: nhóm B (#1, #5, #6, #12, #13, #14).

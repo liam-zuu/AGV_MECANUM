@@ -60,6 +60,10 @@ typedef struct {
     uint8_t  g_valid, r_valid, wz_src, head_on, slip_flag;
     uint32_t src_switch_count, psi_reset_count, slip_on_count;
     float    psi_ref, e_psi, r, bias_gz;
+    // Thêm 28/10 (Codex ctrl-imu #11, #8 (c)): cuối dòng để cột cũ giữ chỗ
+    float    src_switch_dwz;
+    uint32_t bias_updates;
+    uint8_t  slip_eval;        // 1: tick này xét được r; 0: không (cờ 0 không có nghĩa "không trượt")
 } log_data_t;
 
 #define LOG_KIND_DATA    0

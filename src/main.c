@@ -289,6 +289,9 @@ static void push_log(int64_t t_now, agv_velocity_t vel, const vel_ctrl_out_t *vc
         .slip_on_count = m->slip_on_count,
         .r        = m->r,
         .bias_gz  = m->bias_gz,
+        .src_switch_dwz = m->src_switch_dwz,
+        .bias_updates   = m->bias_updates,
+        .slip_eval      = m->slip_eval,
     };
     logger_push(&d);
 }
