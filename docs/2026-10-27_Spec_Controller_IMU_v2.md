@@ -250,7 +250,7 @@ Mỗi metric so với ngưỡng **cùng thứ nguyên**: `δ_wz` = 1/512 rad/s (
 ## 12. Còn mở
 
 - ~~§7b chờ Liam duyệt~~ **Liam duyệt 28/10, đã làm (env `hil_bench`)**; còn Liam kiểm failsafe bộ thu (§7b.3).
-- **LED trắng cho lỗi IMU trùng với trạng thái WAITING** (`main.c:150-156`: trắng nháy + bíp ngắn mỗi giây): chờ Liam chọn lại màu/kiểu (phát hiện 28/10).
+- **LED trắng cho lỗi IMU trùng với trạng thái WAITING** (`main.c:150-156`: trắng nháy + bíp ngắn mỗi giây): chờ Liam chọn lại màu/kiểu (phát hiện 28/10). Liam chọn xanh dương 28/10, nhưng **xanh dương (0, 100, 255) đã dùng cho AUTO nguồn UART** (`main.c:182-183`, sáng liên tục): chờ Liam chọn lại.
 - Mọi ngưỡng [ĐỀ XUẤT]: dùng tạm, chốt sau đo nhiễu IMU 20/100 Hz (env `imu_log_20`, `imu_log_100`; checklist).
 - Tần số IMU: theo thí nghiệm §10.
 - Trượt cách A: **làm từ đầu** cùng C (Liam 27/10 khuya, §1b.4); cách viết A (số bước con, vòng trong không numpy) chờ số đo thời gian plant trên Pi (28/10). Đo μ hiệu dụng: Liam duyệt 27/10 (§1b.4); env lái do CODE viết khi chuẩn bị đo.
