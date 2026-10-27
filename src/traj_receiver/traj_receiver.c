@@ -13,6 +13,9 @@ static const char *TAG = "TRAJ";
 static volatile traj_setpoint_t g_setpoint  = {0};
 static volatile int64_t         g_last_us   = 0;   /* timestamp of last valid packet (µs) */
 static volatile traj_source_t   g_source    = TRAJ_SRC_NONE;
+static volatile uint32_t        g_uart_ok   = 0;   /* UART packets with a good XOR */
+static volatile uint32_t        g_uart_bad  = 0;   /* UART packets with a bad XOR  */
+static volatile int64_t         g_uart_last_us = 0;
 
 /* ── Packet parser — dùng chung cho cả 2 nguồn ───────────────────────── */
 /*
@@ -74,7 +77,10 @@ static void _uart_task(void *pv)
                 traj_setpoint_t sp;
                 if (_parse_packet(pkt, &sp)) {
                     _commit(&sp, TRAJ_SRC_UART);
+                    g_uart_ok++;
+                    g_uart_last_us = g_last_us;
                 } else {
+                    g_uart_bad++;
                     /* Checksum fail — resync */
                     ESP_LOGW(TAG, "UART checksum fail, resyncing");
                 }
@@ -167,6 +173,13 @@ traj_setpoint_t traj_receiver_get(void)
         return (traj_setpoint_t){0};
     }
     return g_setpoint;
+}
+
+void traj_receiver_stats(uint32_t *ok, uint32_t *bad, int64_t *last_us)
+{
+    *ok      = g_uart_ok;
+    *bad     = g_uart_bad;
+    *last_us = g_uart_last_us;
 }
 
 traj_source_t traj_receiver_source(void)

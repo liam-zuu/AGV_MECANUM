@@ -45,6 +45,9 @@
 #ifdef TEST_PWM_HOLD
 #include "test_pwm_hold.h"
 #endif
+#ifdef TEST_RELAY
+#include "test_relay.h"
+#endif
 
 void run_tests(void) {
 #ifdef TEST_MOTOR
@@ -77,5 +80,7 @@ void run_tests(void) {
     test_enc_count();
 #elif defined(TEST_PWM_HOLD)
     test_pwm_hold();
+#elif defined(TEST_RELAY)
+    test_relay();
 #endif
 }

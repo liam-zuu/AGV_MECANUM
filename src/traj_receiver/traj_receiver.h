@@ -68,4 +68,7 @@ traj_source_t traj_receiver_source(void);
  * Same UART port as receive — half-duplex OK at 100Hz status rate. */
 void traj_receiver_send_status(float vx, float vy, float wz);
 
+/* UART packet counters since boot (relay check, env relay_check) and receive time of the last good one */
+void traj_receiver_stats(uint32_t *ok, uint32_t *bad, int64_t *last_us);
+
 #endif /* TRAJ_RECEIVER_H */
