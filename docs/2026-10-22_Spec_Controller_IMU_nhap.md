@@ -15,6 +15,13 @@
 7. **Tần số IMU** chốt bằng thí nghiệm fwsim (20 Hz so với 100 Hz), **sau khi đo nhiễu IMU ở cả 2 tần số** (K1, Liam 22/10 ở phiên THESIS; thay quyết định "hoãn đo nhiễu" cùng ngày). Trong lúc chờ: 20 Hz (`IMU_REPORT_PERIOD_US`, `imu.h`).
 8. **Trượt:** thêm động lực học trượt bánh–thân vào plant (QĐ 25) để thử cờ trượt trên SIM/HIL; thêm phép thử trượt có kiểm soát trên xe thật, không làm được thì ghi giới hạn (K6).
 
+### 1b. Liam quyết 27/10 (phiên CODE `local_f031991b…`, đưa vào v2)
+
+1. **Dừng độc lập cho phép thử trượt ca A–B (§6.1):** dùng **công tắc nguồn động cơ** trên xe (ngắt phần cứng, không phụ thuộc firmware đang thử). Liam mở cho Claude gợi ý thêm cách tắt bằng tay điều khiển; nếu không được thì công tắc nguồn là đủ.
+2. **Báo lỗi IMU khởi tạo trên xe (§7):** **LED trắng** (LED đỏ đang dùng cho ultrasonic/emergency stop) + còi **1 tiếng dài rồi 5 tiếng ngắn**, lặp lại (độ dài tiếng, khoảng lặp: CODE đề xuất khi viết code). Thay đề xuất cũ "LED đỏ + 3 tiếng ngắn mỗi 2 s".
+3. **Ngưỡng [ĐỀ XUẤT] trong spec dùng tạm** (`wz_corr_max`, `e_ψ_reset`, `k_r`, `T_slip`, `T_init`, `N_init`…); số chính thức chốt sau khi đo nhiễu IMU 20/100 Hz trên xe.
+4. Mô hình trượt bánh–thân trong plant (QĐ 25, §6.1): Liam hỏi giải thích, **chưa chốt**.
+
 ## 2. Hiện trạng code
 
 | Chỗ | Vấn đề | Trạng thái |
