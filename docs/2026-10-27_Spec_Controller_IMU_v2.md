@@ -35,7 +35,7 @@
 ### 1b. Liam quyết 27/10
 
 1. **Dừng độc lập cho phép thử trượt ca X1–X2** (v2 gọi là ca A–B): **công tắc nguồn động cơ** trên xe (ngắt phần cứng, không phụ thuộc firmware đang thử). Cách tắt bằng tay điều khiển: Claude gợi ý ở §7b.
-2. **Báo lỗi IMU khởi tạo trên xe:** **LED trắng** (LED đỏ đang dùng cho ultrasonic/emergency stop) + còi **1 tiếng dài rồi 5 tiếng ngắn**, lặp lại.
+2. **Báo lỗi IMU khởi tạo trên xe:** ~~**LED trắng**~~ **[ĐÃ THAY 28/10, Liam]: LED xanh dương NHÁY** (trắng nháy = WAITING `main.c:150-156`; xanh dương sáng liên tục = AUTO nguồn UART `main.c:182-183`; đỏ = ultrasonic/emergency stop) + còi **1 tiếng dài rồi 5 tiếng ngắn**, lặp lại.
 3. **Ngưỡng [ĐỀ XUẤT] dùng tạm**; số chính thức chốt sau khi đo nhiễu IMU 20/100 Hz trên xe.
 4. ~~**Trượt cách C:** plant bơm trượt có kiểm soát (tín hiệu thử, không phải mô hình vật lý, không cần kiểm fidelity) + ca A, B trên xe. **Cách A** (mô hình vật lý tối thiểu) xét lại sau G4, trước S03, chỉ làm khi (a) xong trước khi chạy GA / khóa cấu hình và (b) đã có số liệu trượt xe thật (ca C) để kiểm theo QĐ 2; thiếu một điều kiện thì vào "hướng phát triển".~~ **[ĐÃ THAY 27/10 khuya, Liam chốt ở phiên CODE `local_f031991b…`]: làm cả A và C ngay từ đầu.** Lời Liam: "làm cả A và C … tôi sẽ chỉ thay đổi quyết định khi có đủ căn cứ cho thấy tôi không kịp thời gian để làm cả 2". **A** (mô hình vật lý tối thiểu: thân có động lực học riêng M, Iz; mỗi bánh lực kéo bão hòa ở μ·N; tham số μ quét được trong DOE) cho DOE/GA và giữ câu Chương 3 về trượt/ma sát là yếu tố nhiễu; **C** (bơm trượt có kiểm soát, tín hiệu thử) để thử cờ nghi trượt lặp lại được, cộng ca X1, X2 trên xe (v2 gọi là ca A, B). A phải xong **trước** thí nghiệm chọn tần số, DOE/GA và khóa cấu hình (15/11, Outline §4). Kiểm A khi chưa có số liệu trượt xe thật: chỉ tới mức μ lớn cho lại plant hiện tại (phát lại S01, S02 P1), kiểm vật lý, tất định; phần trượt chưa kiểm → luận văn ghi là độ nhạy với mô hình chưa kiểm bằng xe thật. ~~Đo μ tĩnh bánh–sàn (kéo/nghiêng) để có mốc: Claude đề xuất 27/10, chưa chốt.~~ **[ĐÃ THAY 27/10 khuya, Liam duyệt]: đo μ hiệu dụng** bằng cách cho xe tự đẩy vào lực kế: dây nối đuôi xe với điểm cố định phía sau qua lực kế; xe chạy tới, tăng PWM thật chậm tới khi bánh quay trơn; đọc lực lớn nhất ngay trước khi trượt (quay video); 5 lần đi thẳng, 5 lần đi ngang; cân xe; μ_hd = F_max / (m·g). Không dùng phép kéo xe khóa bánh hay mặt nghiêng: con lăn Mecanum tự lăn nên đo ra lực cản lăn. Dừng độc lập: công tắc nguồn động cơ. Kết quả cho A một mốc kiểm (mức lực bắt đầu trượt); động lực sau trượt vẫn chưa kiểm. Liam tự tìm lực kế. Cách lái: **env riêng do CODE viết** (tăng PWM chậm theo nhịp cố định, log PWM + tốc độ bánh); Liam 27/10: **chưa viết bây giờ, viết khi chuẩn bị đo**, Claude nhắc lúc đó. Dữ liệu: `05_DATA/results/MU_FLOOR/`. Dữ kiện khả thi CODE gửi THESIS 27/10: A khoảng 11–19 h [UL]; tải 1 kHz chờ số đo Pi (`rpi5/plant_timing.py`, Liam đo 28/10).
 
@@ -166,7 +166,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 - `imu_init()` trả mã lỗi. Khởi tạo **đạt** khi trong `T_init` [ĐỀ XUẤT: 2 s] nhận được ít nhất `N_init` report **gyro và game RV** [ĐỀ XUẤT: 3 mỗi loại], không chỉ dựa vào `sh2_open` (thư viện có thể báo thành công giả hoặc treo: G0 v1 R1, R2, R10).
 - Watchdog: `imu_init` chạy trong task riêng có hạn `T_init`; quá hạn là lỗi.
 - Lỗi khởi tạo → không bật motor, ở trạng thái lỗi:
-  - **xe thật (Liam 27/10):** LED RGB (GPIO48) **trắng** + còi (GPIO17) **1 tiếng dài rồi 5 tiếng ngắn**, lặp [ĐỀ XUẤT: dài 600 ms, nghỉ 200 ms, ngắn 120 ms bật / 120 ms tắt, lặp mỗi 3 s];
+  - **xe thật (Liam 27/10):** LED RGB (GPIO48) **xanh dương nháy** (Liam 28/10) + còi (GPIO17) **1 tiếng dài rồi 5 tiếng ngắn**, lặp [ĐỀ XUẤT: dài 600 ms, nghỉ 200 ms, ngắn 120 ms bật / 120 ms tắt, lặp mỗi 3 s];
   - HIL: log `IMU_INIT_FAIL`; RPi5 thấy qua log/status;
   - fwsim: hàm khởi tạo trả lỗi → test fail với thông báo rõ;
   - env đo `imu_log_*`: chỉ in `IMU READY` khi đạt, lỗi thì in `IMU INIT FAIL <mã>` (C2-N1).
@@ -250,7 +250,7 @@ Mỗi metric so với ngưỡng **cùng thứ nguyên**: `δ_wz` = 1/512 rad/s (
 ## 12. Còn mở
 
 - ~~§7b chờ Liam duyệt~~ **Liam duyệt 28/10, đã làm (env `hil_bench`)**; còn Liam kiểm failsafe bộ thu (§7b.3).
-- **LED trắng cho lỗi IMU trùng với trạng thái WAITING** (`main.c:150-156`: trắng nháy + bíp ngắn mỗi giây): chờ Liam chọn lại màu/kiểu (phát hiện 28/10). Liam chọn xanh dương 28/10, nhưng **xanh dương (0, 100, 255) đã dùng cho AUTO nguồn UART** (`main.c:182-183`, sáng liên tục): chờ Liam chọn lại.
+- **LED trắng cho lỗi IMU trùng với trạng thái WAITING** (`main.c:150-156`: trắng nháy + bíp ngắn mỗi giây): chờ Liam chọn lại màu/kiểu (phát hiện 28/10). Liam chọn xanh dương 28/10, nhưng xanh dương (0, 100, 255) đã dùng cho AUTO nguồn UART (`main.c:182-183`, sáng liên tục). **[XONG 28/10, Liam chốt]: xanh dương NHÁY** + còi 1 dài 5 ngắn (AUTO là xanh dương sáng liên tục).
 - Mọi ngưỡng [ĐỀ XUẤT]: dùng tạm, chốt sau đo nhiễu IMU 20/100 Hz (env `imu_log_20`, `imu_log_100`; checklist).
 - Tần số IMU: theo thí nghiệm §10.
 - Trượt cách A: **làm từ đầu** cùng C (Liam 27/10 khuya, §1b.4); cách viết A (số bước con, vòng trong không numpy) chờ số đo thời gian plant trên Pi (28/10). Đo μ hiệu dụng: Liam duyệt 27/10 (§1b.4); env lái do CODE viết khi chuẩn bị đo.
