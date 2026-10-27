@@ -2,7 +2,7 @@
 
 *v2 viết 27/10/2026, phiên CODE `local_f031991b…`. Thay v1 (`docs/2026-10-22_Spec_Controller_IMU_nhap.md`, giữ để tra). Đưa vào: 4 quyết định Liam 27/10 (§1b, chốt ở phiên CODE (fork) `local_5d146186…`); các mục review Codex vòng 2 (`01_THESIS/review/2026-10-22_Review_spec_controller_IMU_vong2.md`, ký hiệu C2-#); đề xuất SWA/mất sóng (§7b, **chờ Liam duyệt**). Số ghi **[ĐỀ XUẤT]** dùng tạm (Liam 27/10), chốt sau khi đo nhiễu IMU 20/100 Hz trên xe. Căn cứ code: `AGV_MECANUM` `e3c28fe`, `hil-framework` `g2-bno-h7` `f458ebd`.*
 
-*v2.1 (27/10 khuya): sửa theo bản kiểm O2 lượt 2 của THESIS (`01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md`, ký hiệu V#): V1, V3–V6, V9, V11–V14 CODE tự sửa; **V2, V7, V8, V10 chờ Liam** (§12). Tên ca thử trên xe đổi thành **X1–X4** (V12) để khỏi trùng "cách A/C" (plant) và "nhóm bài A".*
+*v2.1 (27/10 khuya): sửa theo bản kiểm O2 lượt 2 của THESIS (`01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md`, ký hiệu V#): V1, V3–V6, V9, V11–V14 CODE tự sửa; ~~V2, V7, V8, V10 chờ Liam~~ **v2.2: V2, V7, V8, V10 Liam chốt 27/10 ở phiên THESIS (Liam: "tôi nghiêng theo bạn đấy, chốt 4 V đó cho tôi đi"; `01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md` mục "Kết quả", repo gốc `d580a05`)**, ghi tại chỗ. Tên ca thử trên xe đổi thành **X1–X4** (V12) để khỏi trùng "cách A/C" (plant) và "nhóm bài A".*
 
 ## 0. Thay đổi v1 → v2
 
@@ -137,7 +137,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 
 **Trên SIM/HIL: cách C (bơm có kiểm soát) trên nền plant cách A (Liam 27/10 khuya, §1b.4).**
 
-- **Bơm vào đâu (V2, chờ Liam):** (a) **ở đầu vào mô hình gyro**: gyro giả thấy `(1 − s)·wz_thân`, trạng thái plant không đổi, nên `r` biết chính xác và không phụ thuộc μ (THESIS và CODE nghiêng về cách này; luận văn gọi là bơm bất nhất IMU–encoder có kiểm soát); hoặc (b) **vào trạng thái thân** của plant A: gần vật lý hơn nhưng lực kéo của A phản ứng, nên `r` phụ thuộc μ, phải đo bằng `r_true`. Khoảng bơm `[t0, t0 + T_inj]` khóa trước. Python plant (RPi5) và fwsim dùng chung code. C là **tín hiệu thử**, không kiểm fidelity.
+- **Bơm vào đâu (V2, Liam chốt (a)):** **ở đầu vào mô hình gyro**: gyro giả thấy `(1 − s)·wz_thân` trong khoảng bơm, trạng thái plant không đổi, nên `r` biết chính xác và không phụ thuộc A. Luận văn gọi là *controlled IMU–encoder inconsistency injection*; trượt vật lý để cho A. *(Phương án (b) bơm vào trạng thái thân: không chọn.)* Vì bơm nằm ở mô hình IMU, chỗ code là `rpi5/imu_model.py` (dùng chung RPi5 và fwsim), không phải `plant_step.py`. Đây là năng lực của bộ HIL, thuộc claim C7 Ch. 3 (V8, Liam chốt (a); THESIS sửa `.tex` sau khi Liam duyệt câu chữ). Khoảng bơm `[t0, t0 + T_inj]` khóa trước. Python plant (RPi5) và fwsim dùng chung code. C là **tín hiệu thử**, không kiểm fidelity.
 - **Trượt thật của plant A (V1):** plant A ghi thêm `r_true = wz_suy_từ_bánh − wz_thân` mỗi bước (từ trạng thái plant). Mỗi lần cờ bật được phân loại **đúng** (`|r_true| ≥ r_th/2`, hoặc đang trong cửa sổ bơm) hay **nhầm**.
 - **Đặt ca theo biên độ r mục tiêu (V3):** ca dưới ngưỡng `r ≈ 0,5·r_th`, ca trên ngưỡng `r ≥ 2·r_th`; `s` của từng bài tính sau khi đo nhiễu (K1, ra `σ_gz`), khóa cùng các ngưỡng khác (QĐ 21).
 
@@ -155,7 +155,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 |---|---|---|---|
 | X1. Kê bánh hoàn toàn | Xe trên giá, lệnh quay tại chỗ: bánh quay, thân đứng yên | Cờ bật trong lượt | 5 |
 | X2. Giữ thân xe | Trên sàn, tốc độ thấp, chặn thân vào vật cố định rồi lệnh quay. **Hợp lệ chỉ khi log cho thấy bánh quay** (`max |ω| ≥ ω_min`); bánh không quay là kẹt, ghi riêng | Cờ bật ở các lượt hợp lệ | 5 |
-| X3. Mặt trơn dưới 1–2 bánh | Tấm mica/giấy nến dưới bánh, đi thẳng hoặc quay | Mô tả: ghi `r` và trạng thái cờ, không đặt đạt/không đạt. Dùng X3 để đối chiếu hành vi trượt của plant A (log đủ lệnh để phát lại trong fwsim, đo thêm μ_hd trên mặt trơn): **chờ Liam (V7)**; nếu làm phải xếp trước GA/15/11 | 5 |
+| X3. Mặt trơn dưới 1–2 bánh | Tấm mica/giấy nến dưới bánh, đi thẳng hoặc quay | Mô tả: ghi `r` và trạng thái cờ, không đặt đạt/không đạt. **Dùng X3 để đối chiếu hành vi trượt của plant A (V7, Liam chốt có):** log đủ lệnh để phát lại trong fwsim với A; **đo thêm μ_hd trên mặt trơn** bằng cùng cách lực kế, cùng buổi đo μ sàn (§1b.4); so `r` đo với `r` mô phỏng, chỉ mô tả; xếp lịch **trước GA/khóa cấu hình 15/11** | 5 |
 | X4. Chạy bình thường | Nhóm bài A trên sàn | Báo **số lần bật cờ trên tổng thời gian chạy**; 0 lần không có nghĩa xác suất bằng 0 | theo S02 |
 
 - **N = 5 (V14):** chỉ báo "k/5 lượt", không suy ra xác suất phát hiện.
@@ -229,7 +229,7 @@ Hệ quả: nạp firmware xe thì phải bật SWA mới chạy motor; nạp b�
 | Bơm trượt (§6.1) | Như bảng §6.1 |
 | Khởi tạo IMU lỗi | Không bật motor; báo lỗi |
 
-**Thí nghiệm chọn tần số (C2-#3: sửa thứ nguyên và luật "hoặc").** Protocol khóa trước khi chạy: đầu vào nhiễu đo ở từng tần số; cùng gain khởi đầu, cùng seed {0..4}; tập bài nhóm A + bài quay (A-F2) + bài đổi wz nhanh. Metric so với giá trị thật của plant: `E_wz` = RMS e_wz (rad/s), `E_ψ` = RMS e_ψ (rad), `R_pwm` = độ rung PWM. Hiệu từng cặp seed: `d_X = X(20 Hz) − X(100 Hz)`. **Dữ liệu phát triển (V9):** các lượt của thí nghiệm này là dữ liệu phát triển; tập kiểm cuối khóa riêng, không trùng lượt (Ch. 3). Tần số chọn ở **gain khởi đầu**, trước GA: ghi là giới hạn; có thể chạy lại so sánh ở gain đã chọn nhưng chỉ để mô tả, không đổi tần số đã khóa. **δ (V10, chờ Liam):** đang là độ phân giải cảm biến; THESIS đề xuất `δ = max(độ phân giải, một phần nhỏ của mục tiêu nhiệm vụ)`.
+**Thí nghiệm chọn tần số (C2-#3: sửa thứ nguyên và luật "hoặc").** Protocol khóa trước khi chạy: đầu vào nhiễu đo ở từng tần số; cùng gain khởi đầu, cùng seed {0..4}; tập bài nhóm A + bài quay (A-F2) + bài đổi wz nhanh. Metric so với giá trị thật của plant: `E_wz` = RMS e_wz (rad/s), `E_ψ` = RMS e_ψ (rad), `R_pwm` = độ rung PWM. Hiệu từng cặp seed: `d_X = X(20 Hz) − X(100 Hz)`. **Dữ liệu phát triển (V9):** các lượt của thí nghiệm này là dữ liệu phát triển; tập kiểm cuối khóa riêng, không trùng lượt (Ch. 3). Tần số chọn ở **gain khởi đầu**, trước GA: ghi là giới hạn; có thể chạy lại so sánh ở gain đã chọn nhưng chỉ để mô tả, không đổi tần số đã khóa. **δ (V10, Liam chốt (b)):** `δ = max(độ phân giải, một phần nhỏ của mục tiêu nhiệm vụ)`, mục tiêu lấy từ đặc tính H ở Ch. 4.2; tỉ lệ "một phần nhỏ" chốt cùng mục tiêu ở Ch. 4.2 (chưa chốt). **Lối thoát:** tới lúc chạy thí nghiệm mà Ch. 4 chưa chốt mục tiêu thì dùng δ theo độ phân giải ở trên và ghi thành giới hạn.
 
 Chọn **100 Hz** chỉ khi đủ cả ba:
 1. ít nhất một trong hai **cải thiện thật**: `mean(d_wz) > max(δ_wz, 2·SE(d_wz))` hoặc `mean(d_ψ) > max(δ_ψ, 2·SE(d_ψ))`;
@@ -254,5 +254,5 @@ Mỗi metric so với ngưỡng **cùng thứ nguyên**: `δ_wz` = 1/512 rad/s (
 - Tần số IMU: theo thí nghiệm §10.
 - Trượt cách A: **làm từ đầu** cùng C (Liam 27/10 khuya, §1b.4); cách viết A (số bước con, vòng trong không numpy) chờ số đo thời gian plant trên Pi (28/10). Đo μ hiệu dụng: Liam duyệt 27/10 (§1b.4); env lái do CODE viết khi chuẩn bị đo.
 - ~~THESIS kiểm lại §6.1 và §10~~ **[XONG 27/10]:** O2 lượt 2 (`01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md`); v2.1 đã sửa V1, V3–V6, V9, V11–V14.
-- **Chờ Liam (THESIS trình):** V2 bơm C vào đầu vào gyro hay vào trạng thái thân; V7 dùng ca X3 để đối chiếu A và đo μ_hd trên mặt trơn không; V8 bơm C có vào claim C7 của Ch. 3 không; V10 δ theo độ phân giải hay theo mục tiêu nhiệm vụ.
+- ~~Chờ Liam: V2, V7, V8, V10~~ **[XONG 27/10, v2.2]:** Liam chốt 27/10 ở phiên THESIS (Liam: "tôi nghiêng theo bạn đấy, chốt 4 V đó cho tôi đi"; `01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md` mục "Kết quả", repo gốc `d580a05`): V2 (a) bơm ở đầu vào gyro; V7 có (X3 đối chiếu A, đo μ_hd mặt trơn); V8 (a) bơm C vào claim C7; V10 (b) δ theo mục tiêu nhiệm vụ, lối thoát độ phân giải.
 - `PWM_X12`, `T_X12` (V6): Liam duyệt khi viết env đo X1–X2.
