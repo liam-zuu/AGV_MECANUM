@@ -2,20 +2,23 @@
 
 *v2 viết 27/10/2026, phiên CODE `local_f031991b…`. Thay v1 (`docs/2026-10-22_Spec_Controller_IMU_nhap.md`, giữ để tra). Đưa vào: 4 quyết định Liam 27/10 (§1b, chốt ở phiên CODE (fork) `local_5d146186…`); các mục review Codex vòng 2 (`01_THESIS/review/2026-10-22_Review_spec_controller_IMU_vong2.md`, ký hiệu C2-#); đề xuất SWA/mất sóng (§7b, **chờ Liam duyệt**). Số ghi **[ĐỀ XUẤT]** dùng tạm (Liam 27/10), chốt sau khi đo nhiễu IMU 20/100 Hz trên xe. Căn cứ code: `AGV_MECANUM` `e3c28fe`, `hil-framework` `g2-bno-h7` `f458ebd`.*
 
+*v2.1 (27/10 khuya): sửa theo bản kiểm O2 lượt 2 của THESIS (`01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md`, ký hiệu V#): V1, V3–V6, V9, V11–V14 CODE tự sửa; **V2, V7, V8, V10 chờ Liam** (§12). Tên ca thử trên xe đổi thành **X1–X4** (V12) để khỏi trùng "cách A/C" (plant) và "nhóm bài A".*
+
 ## 0. Thay đổi v1 → v2
 
 | Mục | Thay đổi | Nguồn |
 |---|---|---|
-| §1b | 4 quyết định Liam 27/10: công tắc nguồn động cơ, LED trắng + còi 1 dài 5 ngắn, ngưỡng dùng tạm, trượt cách C | Liam 27/10 |
+| §1b | 4 quyết định Liam 27/10: công tắc nguồn động cơ, LED trắng + còi 1 dài 5 ngắn, ngưỡng dùng tạm, trượt **A + C** (ban đầu chỉ C, đổi 27/10 khuya); đo μ hiệu dụng | Liam 27/10 |
 | §4.1, §3 | Nhận biết chip reset bằng **sự kiện reset** (bộ đếm riêng), bỏ cách "`gyro_n` giảm" (không bao giờ xảy ra); loại mẫu NaN/vô cực | C2-#5 |
 | §4.2 | Dải đo: gyro ±2000 °/s; gia tốc chip ±8 g, frame RPi5 → H7 ±4 g (giữ) | C2-#9 |
 | §4.4 | Điều kiện đứng yên dùng **gia số count mỗi tick**; tuổi mẫu gia tốc; giới hạn bias; ghi giới hạn còn lại | C2-#7 |
 | §5 | Thứ tự ưu tiên khi nhiều sự kiện cùng tick; bật/tắt vòng hướng đo bước PWM như chuyển nguồn | C2-#8 |
-| §6, §6.1 | Cờ chỉ xét khi bánh đang quay; ca B phải xác nhận bánh quay (tách trượt với kẹt); tách 2 claim về độ trễ; báo nhầm theo thời lượng; **trượt cách C** trong plant | C2-#14, Liam 27/10 |
+| §6, §6.1 | Cờ chỉ xét khi bánh đang quay; ca X2 phải xác nhận bánh quay (tách trượt với kẹt); tách 2 claim về độ trễ; báo nhầm theo thời lượng; trượt **A + C**; `r_true`, ca theo r mục tiêu, cửa sổ đạt có hạn tắt, giới hạn PWM/thời gian ca X1–X2 | C2-#14, Liam 27/10, V1, V3–V6, V12, V14 |
 | §7 | Báo lỗi: LED trắng + còi; `IMU READY` chỉ in khi khởi tạo đạt | Liam 27/10, C2-N1 |
 | §7b (mới) | Dừng motor: công tắc nguồn (chính) + SWA/mất sóng chỉ bỏ qua ở env bàn HIL | C2-#4, Liam 27/10 (đề xuất, **chờ duyệt**) |
 | §8 | Đếm mất log khép kín: số thứ tự dòng, đếm lỗi `sendto`, không reset khi đổi controller, có dòng khi motor tắt; mất report trong thư viện | C2-#13, #15 |
 | §10 | fwsim: `v_true` lấy từ trạng thái thân của plant; luật chọn tần số đúng thứ nguyên | C2-#2, #3 |
+| §10 (v2.1) | Ca "IMU hợp lệ suốt" ở μ danh định + điều kiện `r_true`; sàn tuyệt đối `ΔPWM_min`; thí nghiệm tần số là dữ liệu phát triển | V1, V9, V11 |
 | §11 (mới) | Mục thuộc giả lập H7 (G0): `imu_seq`, dải gia tốc, cận số G3/G4: trạng thái và chỗ xử lý | C2-#9, #10, #12 |
 
 ## 1. Đã chốt (Liam 22/10)
@@ -27,14 +30,14 @@
 5. **Cờ nghi trượt / nghi bất nhất:** chỉ báo (log, panel), không tự đổi cách điều khiển, không kết luận nguyên nhân.
 6. **IMU lỗi lúc khởi tạo thì dừng và báo**, không âm thầm chạy tiếp.
 7. **Tần số IMU** chốt bằng thí nghiệm fwsim (20 Hz so với 100 Hz), sau khi đo nhiễu IMU ở cả 2 tần số (K1). Trong lúc chờ: 20 Hz (`IMU_REPORT_PERIOD_US`, `imu.h`).
-8. ~~Trượt: thêm động lực học trượt bánh–thân vào plant (QĐ 25)~~ → **[ĐÃ THAY 27/10, §1b.4]:** trượt cách C (bơm trượt có kiểm soát) + phép thử trên xe (§6.1).
+8. ~~Trượt: thêm động lực học trượt bánh–thân vào plant (QĐ 25)~~ → **[ĐÃ THAY 27/10, §1b.4]:** ~~trượt cách C (bơm trượt có kiểm soát) + phép thử trên xe~~ **[ĐÃ THAY 27/10 khuya]:** trượt **cách A (mô hình vật lý tối thiểu) + cách C (bơm có kiểm soát)** + phép thử trên xe (§6.1).
 
 ### 1b. Liam quyết 27/10
 
-1. **Dừng độc lập cho phép thử trượt ca A–B:** **công tắc nguồn động cơ** trên xe (ngắt phần cứng, không phụ thuộc firmware đang thử). Cách tắt bằng tay điều khiển: Claude gợi ý ở §7b.
+1. **Dừng độc lập cho phép thử trượt ca X1–X2** (v2 gọi là ca A–B): **công tắc nguồn động cơ** trên xe (ngắt phần cứng, không phụ thuộc firmware đang thử). Cách tắt bằng tay điều khiển: Claude gợi ý ở §7b.
 2. **Báo lỗi IMU khởi tạo trên xe:** **LED trắng** (LED đỏ đang dùng cho ultrasonic/emergency stop) + còi **1 tiếng dài rồi 5 tiếng ngắn**, lặp lại.
 3. **Ngưỡng [ĐỀ XUẤT] dùng tạm**; số chính thức chốt sau khi đo nhiễu IMU 20/100 Hz trên xe.
-4. ~~**Trượt cách C:** plant bơm trượt có kiểm soát (tín hiệu thử, không phải mô hình vật lý, không cần kiểm fidelity) + ca A, B trên xe. **Cách A** (mô hình vật lý tối thiểu) xét lại sau G4, trước S03, chỉ làm khi (a) xong trước khi chạy GA / khóa cấu hình và (b) đã có số liệu trượt xe thật (ca C) để kiểm theo QĐ 2; thiếu một điều kiện thì vào "hướng phát triển".~~ **[ĐÃ THAY 27/10 khuya, Liam chốt ở phiên CODE `local_f031991b…`]: làm cả A và C ngay từ đầu.** Lời Liam: "làm cả A và C … tôi sẽ chỉ thay đổi quyết định khi có đủ căn cứ cho thấy tôi không kịp thời gian để làm cả 2". **A** (mô hình vật lý tối thiểu: thân có động lực học riêng M, Iz; mỗi bánh lực kéo bão hòa ở μ·N; tham số μ quét được trong DOE) cho DOE/GA và giữ câu Chương 3 về trượt/ma sát là yếu tố nhiễu; **C** (bơm trượt có kiểm soát, tín hiệu thử) để thử cờ nghi trượt lặp lại được, cộng ca A, B trên xe. A phải xong **trước** thí nghiệm chọn tần số, DOE/GA và khóa cấu hình (15/11, Outline §4). Kiểm A khi chưa có số liệu trượt xe thật: chỉ tới mức μ lớn cho lại plant hiện tại (phát lại S01, S02 P1), kiểm vật lý, tất định; phần trượt chưa kiểm → luận văn ghi là độ nhạy với mô hình chưa kiểm bằng xe thật. ~~Đo μ tĩnh bánh–sàn (kéo/nghiêng) để có mốc: Claude đề xuất 27/10, chưa chốt.~~ **[ĐÃ THAY 27/10 khuya, Liam duyệt]: đo μ hiệu dụng** bằng cách cho xe tự đẩy vào lực kế: dây nối đuôi xe với điểm cố định phía sau qua lực kế; xe chạy tới, tăng PWM thật chậm tới khi bánh quay trơn; đọc lực lớn nhất ngay trước khi trượt (quay video); 5 lần đi thẳng, 5 lần đi ngang; cân xe; μ_hd = F_max / (m·g). Không dùng phép kéo xe khóa bánh hay mặt nghiêng: con lăn Mecanum tự lăn nên đo ra lực cản lăn. Dừng độc lập: công tắc nguồn động cơ. Kết quả cho A một mốc kiểm (mức lực bắt đầu trượt); động lực sau trượt vẫn chưa kiểm. Liam tự tìm lực kế. Cách lái: **env riêng do CODE viết** (tăng PWM chậm theo nhịp cố định, log PWM + tốc độ bánh); Liam 27/10: **chưa viết bây giờ, viết khi chuẩn bị đo**, Claude nhắc lúc đó. Dữ liệu: `05_DATA/results/MU_FLOOR/`. Dữ kiện khả thi CODE gửi THESIS 27/10: A khoảng 11–19 h [UL]; tải 1 kHz chờ số đo Pi (`rpi5/plant_timing.py`, Liam đo 28/10).
+4. ~~**Trượt cách C:** plant bơm trượt có kiểm soát (tín hiệu thử, không phải mô hình vật lý, không cần kiểm fidelity) + ca A, B trên xe. **Cách A** (mô hình vật lý tối thiểu) xét lại sau G4, trước S03, chỉ làm khi (a) xong trước khi chạy GA / khóa cấu hình và (b) đã có số liệu trượt xe thật (ca C) để kiểm theo QĐ 2; thiếu một điều kiện thì vào "hướng phát triển".~~ **[ĐÃ THAY 27/10 khuya, Liam chốt ở phiên CODE `local_f031991b…`]: làm cả A và C ngay từ đầu.** Lời Liam: "làm cả A và C … tôi sẽ chỉ thay đổi quyết định khi có đủ căn cứ cho thấy tôi không kịp thời gian để làm cả 2". **A** (mô hình vật lý tối thiểu: thân có động lực học riêng M, Iz; mỗi bánh lực kéo bão hòa ở μ·N; tham số μ quét được trong DOE) cho DOE/GA và giữ câu Chương 3 về trượt/ma sát là yếu tố nhiễu; **C** (bơm trượt có kiểm soát, tín hiệu thử) để thử cờ nghi trượt lặp lại được, cộng ca X1, X2 trên xe (v2 gọi là ca A, B). A phải xong **trước** thí nghiệm chọn tần số, DOE/GA và khóa cấu hình (15/11, Outline §4). Kiểm A khi chưa có số liệu trượt xe thật: chỉ tới mức μ lớn cho lại plant hiện tại (phát lại S01, S02 P1), kiểm vật lý, tất định; phần trượt chưa kiểm → luận văn ghi là độ nhạy với mô hình chưa kiểm bằng xe thật. ~~Đo μ tĩnh bánh–sàn (kéo/nghiêng) để có mốc: Claude đề xuất 27/10, chưa chốt.~~ **[ĐÃ THAY 27/10 khuya, Liam duyệt]: đo μ hiệu dụng** bằng cách cho xe tự đẩy vào lực kế: dây nối đuôi xe với điểm cố định phía sau qua lực kế; xe chạy tới, tăng PWM thật chậm tới khi bánh quay trơn; đọc lực lớn nhất ngay trước khi trượt (quay video); 5 lần đi thẳng, 5 lần đi ngang; cân xe; μ_hd = F_max / (m·g). Không dùng phép kéo xe khóa bánh hay mặt nghiêng: con lăn Mecanum tự lăn nên đo ra lực cản lăn. Dừng độc lập: công tắc nguồn động cơ. Kết quả cho A một mốc kiểm (mức lực bắt đầu trượt); động lực sau trượt vẫn chưa kiểm. Liam tự tìm lực kế. Cách lái: **env riêng do CODE viết** (tăng PWM chậm theo nhịp cố định, log PWM + tốc độ bánh); Liam 27/10: **chưa viết bây giờ, viết khi chuẩn bị đo**, Claude nhắc lúc đó. Dữ liệu: `05_DATA/results/MU_FLOOR/`. Dữ kiện khả thi CODE gửi THESIS 27/10: A khoảng 11–19 h [UL]; tải 1 kHz chờ số đo Pi (`rpi5/plant_timing.py`, Liam đo 28/10).
 
 ## 2. Hiện trạng code (kiểm 27/10)
 
@@ -132,24 +135,31 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 
 ### 6.1. Phép thử cờ trượt
 
-**Trên SIM/HIL: cách C (Liam 27/10), trên nền plant cách A (Liam 27/10 khuya, §1b.4).** Plant có chế độ **bơm trượt**: trong khoảng `[t0, t0 + T_inj]` đã khóa trước, tốc độ quay thân `wz_body = (1 − s) × wz_bánh` (s = tỷ lệ trượt, đặt trong danh sách bài thử), các thành phần khác giữ như cũ. Gyro giả (IMU model) lấy từ `wz_body`, encoder lấy từ bánh, nên `r` khác 0 đúng trong khoảng bơm. Python plant (RPi5) và fwsim dùng chung code. Đây là **tín hiệu thử**, không phải mô hình trượt: không kiểm fidelity, luận văn ghi đúng như vậy. Plant phải giữ vận tốc thân riêng với tốc độ bánh trong lúc bơm (cũng là điều kiện để sửa `v_true` fwsim, §10).
+**Trên SIM/HIL: cách C (bơm có kiểm soát) trên nền plant cách A (Liam 27/10 khuya, §1b.4).**
+
+- **Bơm vào đâu (V2, chờ Liam):** (a) **ở đầu vào mô hình gyro**: gyro giả thấy `(1 − s)·wz_thân`, trạng thái plant không đổi, nên `r` biết chính xác và không phụ thuộc μ (THESIS và CODE nghiêng về cách này; luận văn gọi là bơm bất nhất IMU–encoder có kiểm soát); hoặc (b) **vào trạng thái thân** của plant A: gần vật lý hơn nhưng lực kéo của A phản ứng, nên `r` phụ thuộc μ, phải đo bằng `r_true`. Khoảng bơm `[t0, t0 + T_inj]` khóa trước. Python plant (RPi5) và fwsim dùng chung code. C là **tín hiệu thử**, không kiểm fidelity.
+- **Trượt thật của plant A (V1):** plant A ghi thêm `r_true = wz_suy_từ_bánh − wz_thân` mỗi bước (từ trạng thái plant). Mỗi lần cờ bật được phân loại **đúng** (`|r_true| ≥ r_th/2`, hoặc đang trong cửa sổ bơm) hay **nhầm**.
+- **Đặt ca theo biên độ r mục tiêu (V3):** ca dưới ngưỡng `r ≈ 0,5·r_th`, ca trên ngưỡng `r ≥ 2·r_th`; `s` của từng bài tính sau khi đo nhiễu (K1, ra `σ_gz`), khóa cùng các ngưỡng khác (QĐ 21).
 
 | Ca SIM/HIL | Đạt khi [ĐỀ XUẤT] |
 |---|---|
-| Bơm s = 1 (thân không quay), lệnh quay tại chỗ | Cờ bật trong `T_slip` + 1 chu kỳ report sau `t0`; tắt sau khi hết bơm; nguồn wz không đổi |
-| Bơm s nhỏ (dưới `r_th`) | Cờ không bật (kiểm ngưỡng, không phải độ nhạy với trượt thật) |
-| Không bơm, nhóm bài A | 0 lần bật cờ |
+| Bơm trên ngưỡng (`r ≥ 2·r_th`), lệnh quay tại chỗ | Cờ bật trong `T_slip` + 1 chu kỳ report + 1 tick (10 ms) sau `t0` (V4); **tắt trong** `T_slip` + 1 chu kỳ report + 1 tick sau `t0 + T_inj`; nguồn wz không đổi |
+| Bơm dưới ngưỡng (`r ≈ 0,5·r_th`) | Cờ không bật (kiểm ngưỡng, không phải độ nhạy với trượt thật) |
+| Không bơm, nhóm bài A, **μ danh định** | Lượt chỉ tính khi `|r_true| < r_th/2` suốt lượt (V1); khi đó 0 lần bật cờ. Lượt có `|r_true|` vượt ngưỡng là ca trượt thật của plant: báo riêng, không tính là báo nhầm |
 
-**Độ trễ, hai claim tách riêng:** (1) trên SIM/HIL đo **từ `t0` bơm tới lúc cờ bật** (biết chính xác `t0`); (2) trên xe chỉ báo "cờ bật trong lượt" và thời điểm bật, **không** claim độ trễ từ sự kiện vật lý.
+**Độ trễ, hai claim tách riêng (V5):** (1) đo **từ `t0` bơm tới lúc cờ bật trên fwsim** (một đồng hồ, biết chính xác `t0`). Trên HIL, `t0` ở đồng hồ RPi5 còn cờ ở log ESP32 (WiFi/UDP): chỉ báo "cờ bật trong cửa sổ", trừ khi có cách ghép thời gian (ví dụ mang số frame SPI vào log ESP32), chưa làm. (2) Trên xe chỉ báo "cờ bật trong lượt" và thời điểm bật, **không** claim độ trễ từ sự kiện vật lý.
 
-**Trên xe thật** (dừng độc lập: công tắc nguồn động cơ, §1b.1; thêm SWA khi §7b được duyệt):
+**Trên xe thật** (dừng độc lập: công tắc nguồn động cơ, §1b.1; thêm SWA khi §7b được duyệt). Tên ca đổi thành X1–X4 (V12).
 
 | Ca | Cách làm | Kỳ vọng | N |
 |---|---|---|---|
-| A. Kê bánh hoàn toàn | Xe trên giá, lệnh quay tại chỗ: bánh quay, thân đứng yên | Cờ bật trong lượt | 5 |
-| B. Giữ thân xe | Trên sàn, tốc độ thấp, chặn thân vào vật cố định rồi lệnh quay. **Hợp lệ chỉ khi log cho thấy bánh quay** (`max |ω| ≥ ω_min`); bánh không quay là kẹt, ghi riêng | Cờ bật ở các lượt hợp lệ | 5 |
-| C. Mặt trơn dưới 1–2 bánh | Tấm mica/giấy nến dưới bánh, đi thẳng hoặc quay | Mô tả: ghi `r` và trạng thái cờ, không đặt đạt/không đạt; là số liệu để xét cách A sau G4 | 5 |
-| D. Chạy bình thường | Nhóm bài A trên sàn | Báo **số lần bật cờ trên tổng thời gian chạy**; 0 lần không có nghĩa xác suất bằng 0 | theo S02 |
+| X1. Kê bánh hoàn toàn | Xe trên giá, lệnh quay tại chỗ: bánh quay, thân đứng yên | Cờ bật trong lượt | 5 |
+| X2. Giữ thân xe | Trên sàn, tốc độ thấp, chặn thân vào vật cố định rồi lệnh quay. **Hợp lệ chỉ khi log cho thấy bánh quay** (`max |ω| ≥ ω_min`); bánh không quay là kẹt, ghi riêng | Cờ bật ở các lượt hợp lệ | 5 |
+| X3. Mặt trơn dưới 1–2 bánh | Tấm mica/giấy nến dưới bánh, đi thẳng hoặc quay | Mô tả: ghi `r` và trạng thái cờ, không đặt đạt/không đạt. Dùng X3 để đối chiếu hành vi trượt của plant A (log đủ lệnh để phát lại trong fwsim, đo thêm μ_hd trên mặt trơn): **chờ Liam (V7)**; nếu làm phải xếp trước GA/15/11 | 5 |
+| X4. Chạy bình thường | Nhóm bài A trên sàn | Báo **số lần bật cờ trên tổng thời gian chạy**; 0 lần không có nghĩa xác suất bằng 0 | theo S02 |
+
+- **N = 5 (V14):** chỉ báo "k/5 lượt", không suy ra xác suất phát hiện.
+- **X1, X2: tích phân dồn (V6).** Gyro vẫn hợp lệ nên wz đo ≈ 0 trong khi `wz_ref ≠ 0`: vòng wz và vòng hướng tích phân dồn, PWM lên tới bão hòa (bánh kê quay hết tốc, hoặc motor đẩy mạnh vào vật chặn). Đây là hành vi thật của controller, được ghi nhận, nhưng có rủi ro an toàn và nóng motor. Giới hạn trong bài chạy: |PWM| ≤ `PWM_X12` và thời gian lệnh quay ≤ `T_X12` [ĐỀ XUẤT: 0,5 và 3 s; Liam duyệt khi viết env đo]; ghi PWM lớn nhất mỗi lượt. Công tắc nguồn vẫn là dừng chính.
 
 ## 7. Khởi tạo và báo lỗi
 
@@ -170,7 +180,7 @@ Liam mở cho gợi ý (§1b.1). Hiện trạng: `main.c:255` đặt cứng `HIL
 1. Bỏ `#define` trong `main.c`; cờ `HIL_BYPASS_MOTOR_ENABLE` chỉ có ở **env bàn HIL** mới (`hil_bench`, kế thừa env chính; bàn HIL không có bộ thu RC). Firmware xe (env chính) dùng SWA.
 2. Mất sóng: dựa vào `valid = false` như trên; dòng TODO trong `ibus.c` thay bằng ghi log `RC_LOST` (dừng đã do vòng SWA làm).
 3. **Liam cần kiểm (chưa có trong file, Claude không đoán):** khi tắt tay điều khiển, bộ thu còn phát gói iBUS (giá trị failsafe) không. Nếu còn, cần đặt failsafe của kênh 7 (SWA) trên tay điều khiển về vị trí tắt, nếu không mất sóng sẽ không tắt motor.
-4. Công tắc nguồn động cơ vẫn là **dừng độc lập chính** cho ca A–B, vì SWA vẫn đi qua firmware đang thử.
+4. Công tắc nguồn động cơ vẫn là **dừng độc lập chính** cho ca X1–X2, vì SWA vẫn đi qua firmware đang thử.
 
 Hệ quả: nạp firmware xe thì phải bật SWA mới chạy motor; nạp bàn HIL dùng env `hil_bench`. Checklist và hướng dẫn nạp phải ghi env nào cho board nào.
 
@@ -209,17 +219,17 @@ Hệ quả: nạp firmware xe thì phải bật SWA mới chạy motor; nạp b�
 
 | Ca | Đạt khi [ĐỀ XUẤT] |
 |---|---|
-| IMU hợp lệ suốt | `wz_src = 1` ở ≥ 99 % tick sau `T_settle`; không cờ trượt |
+| IMU hợp lệ suốt (μ danh định) | `wz_src = 1` ở ≥ 99 % tick sau `T_settle`; không cờ trượt, với điều kiện `|r_true| < r_th/2` suốt lượt (V1) |
 | Giữ mẫu 20 Hz giữa tick 100 Hz | Không tick nào mất hợp lệ chỉ vì chưa có mẫu mới |
 | Mất gyro giữa chừng (bơm lỗi) | Chuyển encoder trong ≤ `T_age` + 1 tick |
-| Chuyển nguồn, bật/tắt vòng hướng | max \|ΔPWM\| một tick trong ±0,2 s quanh sự kiện ≤ k_sw × max \|ΔPWM\| cùng cửa sổ ở lượt không có sự kiện (cùng bài, cùng seed) [ĐỀ XUẤT: k_sw = 1,5]; ghi cả max \|Δwz_cmd\| |
+| Chuyển nguồn, bật/tắt vòng hướng | max \|ΔPWM\| một tick trong ±0,2 s quanh sự kiện ≤ max(k_sw × max \|ΔPWM\| cùng cửa sổ ở lượt không có sự kiện (cùng bài, cùng seed), `ΔPWM_min`) [ĐỀ XUẤT: k_sw = 1,5; `ΔPWM_min` = vài bước PWM, chốt khi viết test, khóa theo QĐ 21] (V11); ghi cả max \|Δwz_cmd\| |
 | Mất yaw, gyro còn | wz vẫn từ IMU; vòng hướng tắt rồi bật lại đúng bảng §5 |
 | Chip reset giữa chừng (sự kiện reset) | Đặt lại `ψ0`, đếm `psi_reset`, không quay giật |
 | Mẫu NaN | Gyro không hợp lệ tới mẫu tốt kế tiếp |
 | Bơm trượt (§6.1) | Như bảng §6.1 |
 | Khởi tạo IMU lỗi | Không bật motor; báo lỗi |
 
-**Thí nghiệm chọn tần số (C2-#3: sửa thứ nguyên và luật "hoặc").** Protocol khóa trước khi chạy: đầu vào nhiễu đo ở từng tần số; cùng gain khởi đầu, cùng seed {0..4}; tập bài nhóm A + bài quay (A-F2) + bài đổi wz nhanh. Metric so với giá trị thật của plant: `E_wz` = RMS e_wz (rad/s), `E_ψ` = RMS e_ψ (rad), `R_pwm` = độ rung PWM. Hiệu từng cặp seed: `d_X = X(20 Hz) − X(100 Hz)`.
+**Thí nghiệm chọn tần số (C2-#3: sửa thứ nguyên và luật "hoặc").** Protocol khóa trước khi chạy: đầu vào nhiễu đo ở từng tần số; cùng gain khởi đầu, cùng seed {0..4}; tập bài nhóm A + bài quay (A-F2) + bài đổi wz nhanh. Metric so với giá trị thật của plant: `E_wz` = RMS e_wz (rad/s), `E_ψ` = RMS e_ψ (rad), `R_pwm` = độ rung PWM. Hiệu từng cặp seed: `d_X = X(20 Hz) − X(100 Hz)`. **Dữ liệu phát triển (V9):** các lượt của thí nghiệm này là dữ liệu phát triển; tập kiểm cuối khóa riêng, không trùng lượt (Ch. 3). Tần số chọn ở **gain khởi đầu**, trước GA: ghi là giới hạn; có thể chạy lại so sánh ở gain đã chọn nhưng chỉ để mô tả, không đổi tần số đã khóa. **δ (V10, chờ Liam):** đang là độ phân giải cảm biến; THESIS đề xuất `δ = max(độ phân giải, một phần nhỏ của mục tiêu nhiệm vụ)`.
 
 Chọn **100 Hz** chỉ khi đủ cả ba:
 1. ít nhất một trong hai **cải thiện thật**: `mean(d_wz) > max(δ_wz, 2·SE(d_wz))` hoặc `mean(d_ψ) > max(δ_ψ, 2·SE(d_ψ))`;
@@ -243,4 +253,6 @@ Mỗi metric so với ngưỡng **cùng thứ nguyên**: `δ_wz` = 1/512 rad/s (
 - Mọi ngưỡng [ĐỀ XUẤT]: dùng tạm, chốt sau đo nhiễu IMU 20/100 Hz (env `imu_log_20`, `imu_log_100`; checklist).
 - Tần số IMU: theo thí nghiệm §10.
 - Trượt cách A: **làm từ đầu** cùng C (Liam 27/10 khuya, §1b.4); cách viết A (số bước con, vòng trong không numpy) chờ số đo thời gian plant trên Pi (28/10). Đo μ hiệu dụng: Liam duyệt 27/10 (§1b.4); env lái do CODE viết khi chuẩn bị đo.
-- THESIS kiểm lại §6.1 (cách C, ca A–D) và §10 (luật tần số) xem có đo được và đỡ được claim không.
+- ~~THESIS kiểm lại §6.1 và §10~~ **[XONG 27/10]:** O2 lượt 2 (`01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md`); v2.1 đã sửa V1, V3–V6, V9, V11–V14.
+- **Chờ Liam (THESIS trình):** V2 bơm C vào đầu vào gyro hay vào trạng thái thân; V7 dùng ca X3 để đối chiếu A và đo μ_hd trên mặt trơn không; V8 bơm C có vào claim C7 của Ch. 3 không; V10 δ theo độ phân giải hay theo mục tiêu nhiệm vụ.
+- `PWM_X12`, `T_X12` (V6): Liam duyệt khi viết env đo X1–X2.
