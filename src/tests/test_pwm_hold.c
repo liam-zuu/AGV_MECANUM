@@ -20,7 +20,8 @@
 // Env pwm_hold_drv46 (-DPWM_HOLD_DRV46, 27/10): raises the pad drive strength of
 // GPIO46 to GPIO_DRIVE_CAP_3 after motor_init(). The H7 misreads only the signal
 // from GPIO46 (PWM_CAPTURE run01-run05); this checks whether a weak edge is the
-// cause. Test env only: the car firmware keeps the default drive strength.
+// cause. Test env only. Since 27/10 motor_init() itself sets GPIO46 to CAP_3
+// (run06/run07 confirmed the drive strength), so this env now matches pwm_hold.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #define STEP_MS 5000
@@ -47,7 +48,7 @@ static void imu_init_task(void *pv) {
 
 void test_pwm_hold(void) {
     motor_init();                         /* EN = 0 */
-    print_drive_caps("default");
+    print_drive_caps("after_motor_init");   /* motor_init() sets GPIO46 to CAP_3 since 27/10 */
 #ifdef PWM_HOLD_DRV46
     gpio_set_drive_capability(RL_RPWM, GPIO_DRIVE_CAP_3);
     print_drive_caps("after_set");

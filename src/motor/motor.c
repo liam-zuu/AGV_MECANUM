@@ -85,6 +85,10 @@ void motor_init(void) {
         mcpwm_timer_start_stop(timers[i], MCPWM_TIMER_START_NO_STOP);
     }
 
+    // Dòng ra GPIO46 (RL_RPWM) lên mức 3: ở mức mặc định (2), H7 đọc sai xung từ chân này khi băm duty 70 %
+    // (05_DATA/results/PWM_CAPTURE/2026-10-27_run06, run07; cơ chế chưa rõ). Liam duyệt 27/10, chỉ chân này.
+    gpio_set_drive_capability(RL_RPWM, GPIO_DRIVE_CAP_3);
+
     // EN chung
     gpio_config_t en_cfg = {
         .pin_bit_mask = (1ULL << GPIO_EN),
