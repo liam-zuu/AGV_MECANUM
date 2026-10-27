@@ -20,7 +20,7 @@
 1. **Dừng độc lập cho phép thử trượt ca A–B (§6.1):** dùng **công tắc nguồn động cơ** trên xe (ngắt phần cứng, không phụ thuộc firmware đang thử). Liam mở cho Claude gợi ý thêm cách tắt bằng tay điều khiển; nếu không được thì công tắc nguồn là đủ.
 2. **Báo lỗi IMU khởi tạo trên xe (§7):** **LED trắng** (LED đỏ đang dùng cho ultrasonic/emergency stop) + còi **1 tiếng dài rồi 5 tiếng ngắn**, lặp lại (độ dài tiếng, khoảng lặp: CODE đề xuất khi viết code). Thay đề xuất cũ "LED đỏ + 3 tiếng ngắn mỗi 2 s".
 3. **Ngưỡng [ĐỀ XUẤT] trong spec dùng tạm** (`wz_corr_max`, `e_ψ_reset`, `k_r`, `T_slip`, `T_init`, `N_init`…); số chính thức chốt sau khi đo nhiễu IMU 20/100 Hz trên xe.
-4. Mô hình trượt bánh–thân trong plant (QĐ 25, §6.1): Liam hỏi giải thích, **chưa chốt**.
+4. ~~Mô hình trượt bánh–thân trong plant (QĐ 25, §6.1): Liam hỏi giải thích, **chưa chốt**.~~ **[ĐÃ THAY 27/10, Liam chốt]:** làm **cách C**: plant **bơm trượt có kiểm soát** (trong một khoảng thời gian đã khóa, thân xe quay khác với tốc độ suy từ bánh; là tín hiệu thử, không phải mô hình vật lý, không cần kiểm fidelity), cộng ca A, B (§6.1) trên xe. **Cách A** (mô hình vật lý tối thiểu: thân có động lực học riêng, bánh truyền lực qua ma sát có giới hạn) **xét lại sau G4, trước S03**, chỉ làm khi đủ hai điều kiện: (a) xong trước khi chạy GA / khóa cấu hình (plant đổi sau GA thì số RQ2/RQ3 lẫn hai phiên bản plant); (b) đã có số liệu trượt xe thật (ca C, mặt trơn) để kiểm mô hình theo QĐ 2. Thiếu một điều kiện thì A vào "hướng phát triển". Thay cách hiểu QĐ 25 "thêm động lực học trượt vào plant" (THESIS sửa Outline).
 
 ## 2. Hiện trạng code
 
