@@ -1,6 +1,7 @@
 #include "test_openloop.h"
 #include "encoder/encoder.h"
 #include "motor/motor.h"
+#include "imu/imu.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
@@ -29,9 +30,15 @@
 //   H                       heartbeat; required at least every 500 ms during a run
 //   STOP                    abort now
 // ESP32 -> PC after a run
-//   DONE n=<samples> aborted=<0|1> reason=<ok|stop|heartbeat|overflow>
+//   DONE n=<samples> aborted=<0|1> reason=<ok|stop|heartbeat|overflow> imu_n=<k> imu_overflow=<0|1>
 //   <t_us>,<count>,<pwm>,<en>      one line per sample, t_us from run start
+//   I,<t_us>,<kind>,<v0>,<v1>,<v2> one line per IMU report during the run (kind A accel m/s^2,
+//                                  G gyro rad/s, R game RV euler deg; t_us = host receive time
+//                                  from run start)  [v2, 28/10: every firmware has the IMU, QD 23]
 //   END
+//
+// Boot: "OL READY v2 imu=<code> init_ms=<ms>". imu_init() failed (code != 0) -> every RUN
+// answers "ERR imu <code>" (spec controller-IMU v2.2 section 7: stop and report).
 //
 // Safety: motors are off (EN=0, PWM 0) at boot, after every run and on abort.
 // A run aborts if no line arrives for 500 ms, on STOP, or if the buffer fills.
@@ -49,6 +56,13 @@
 
 typedef struct { int16_t pwm; uint8_t en; uint32_t dur_ms; } ol_seg_t;
 typedef struct __attribute__((packed)) { uint32_t t_us; int32_t count; int16_t pwm; uint8_t en; } ol_sample_t;
+typedef struct __attribute__((packed)) { uint32_t t_us; char kind; float v[3]; } ol_imu_t;
+
+#define OL_MAX_IMU         1024             /* 12 s x 20 Hz x 3 reports = 720 */
+static ol_imu_t    *s_ibuf = NULL;
+static volatile int s_in;
+static volatile bool s_ioverflow;
+static int          s_imu_rc = -1;
 
 static ol_seg_t     s_segs[OL_MAX_SEGS];
 static uint32_t     s_seg_end_ms[OL_MAX_SEGS];
@@ -102,15 +116,33 @@ static void ol_tick(void *arg) {
     s_n++;
 }
 
+// IMU report hook (library callback task): keep the reports of the running schedule
+static void ol_imu_hook(uint8_t rpt_id, int64_t t_us, uint32_t n, const float v[4]) {
+    (void)n;
+    if (!s_running) return;
+    if (s_in >= OL_MAX_IMU) { s_ioverflow = true; return; }
+    ol_imu_t *p = &s_ibuf[s_in];
+    p->t_us = (uint32_t)(t_us - s_t0);
+    p->kind = (rpt_id == IMU_RPT_ACCEL) ? 'A' : (rpt_id == IMU_RPT_GYRO) ? 'G' : 'R';
+    p->v[0] = v[0]; p->v[1] = v[1]; p->v[2] = v[2];
+    s_in++;
+}
+
 static void send_samples(void) {
-    char line[64];
-    snprintf(line, sizeof line, "DONE n=%d aborted=%d reason=%s\n",
-             s_n, s_reason != 0, REASON[s_reason]);
+    char line[96];
+    snprintf(line, sizeof line, "DONE n=%d aborted=%d reason=%s imu_n=%d imu_overflow=%d\n",
+             s_n, s_reason != 0, REASON[s_reason], s_in, s_ioverflow ? 1 : 0);
     out(line);
     for (int i = 0; i < s_n; i++) {
         const ol_sample_t *p = &s_buf[i];
         int len = snprintf(line, sizeof line, "%lu,%ld,%d,%u\n",
                            (unsigned long)p->t_us, (long)p->count, p->pwm, p->en);
+        uart_write_bytes(OL_UART, line, len);
+    }
+    for (int i = 0; i < s_in; i++) {
+        const ol_imu_t *p = &s_ibuf[i];
+        int len = snprintf(line, sizeof line, "I,%lu,%c,%.5f,%.5f,%.5f\n",
+                           (unsigned long)p->t_us, p->kind, p->v[0], p->v[1], p->v[2]);
         uart_write_bytes(OL_UART, line, len);
     }
     out("END\n");
@@ -122,9 +154,16 @@ static void start_run(int wheel) {
     if (wheel < 0 || wheel >= MOTOR_COUNT)  { out("ERR wheel\n"); return; }
     if (s_nseg == 0)                        { out("ERR no segments\n"); return; }
     if (total > OL_MAX_RUN_MS)              { out("ERR too long\n"); return; }
+    if (s_imu_rc != IMU_INIT_OK) {
+        char msg[32];
+        snprintf(msg, sizeof msg, "ERR imu %d\n", s_imu_rc);
+        out(msg);
+        return;
+    }
 
     encoder_clear((enc_id_t)wheel);
     s_wheel = wheel; s_seg = 0; s_n = 0; s_reason = 0; s_abort_req = false;
+    s_in = 0; s_ioverflow = false;
     s_t0 = s_last_hb = esp_timer_get_time();
     s_running = true;
     out("OK RUN\n");
@@ -174,9 +213,12 @@ void test_openloop(void) {
     encoder_init();
     motors_safe();
 
-    s_buf = heap_caps_malloc(OL_MAX_SAMPLES * sizeof(ol_sample_t), MALLOC_CAP_8BIT);
+    s_buf  = heap_caps_malloc(OL_MAX_SAMPLES * sizeof(ol_sample_t), MALLOC_CAP_8BIT);
+    s_ibuf = heap_caps_malloc(OL_MAX_IMU * sizeof(ol_imu_t), MALLOC_CAP_8BIT);
 
     esp_log_level_set("*", ESP_LOG_NONE);   /* keep UART0 for data only */
+    imu_set_report_hook(ol_imu_hook);
+    s_imu_rc = imu_init();                  /* at most IMU_INIT_TIMEOUT_MS */
     uart_driver_install(OL_UART, 1024, 4096, 0, NULL, 0);
     uart_set_baudrate(OL_UART, OL_BAUD);
 
@@ -184,10 +226,12 @@ void test_openloop(void) {
     esp_timer_create(&targs, &s_timer);
     esp_timer_start_periodic(s_timer, OL_PERIOD_US);
 
-    if (s_buf == NULL) {
+    if (s_buf == NULL || s_ibuf == NULL) {
         while (1) { out("ERR no memory\n"); vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
-    out("OL READY v1\n");
+    char ready[64];
+    snprintf(ready, sizeof ready, "OL READY v2 imu=%d init_ms=%lu\n", s_imu_rc, (unsigned long)imu_init_ms());
+    out(ready);
 
     char ln[64]; int k = 0; uint8_t c;
     while (1) {

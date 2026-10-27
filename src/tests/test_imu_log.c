@@ -61,10 +61,17 @@ void test_imu_log(void) {
     s_q = xQueueCreate(IL_QLEN, sizeof(il_rec_t));
     configASSERT(s_q);
     imu_set_report_hook(hook);
-    imu_init();
+    int rc = imu_init();
 
+    // Chỉ in IMU READY khi khởi tạo đạt (spec controller–IMU v2.2 §7, C2-N1); lỗi thì in mã lỗi
+    // rồi vẫn ghi mọi report tới được (để gỡ lỗi), công cụ PC không thấy IMU READY nên dừng.
     char line[160];
-    snprintf(line, sizeof line, "IMU READY v2 period_us=%lu\n", (unsigned long)IMU_REPORT_PERIOD_US);
+    if (rc == IMU_INIT_OK)
+        snprintf(line, sizeof line, "IMU READY v2 period_us=%lu init_ms=%lu\n",
+                 (unsigned long)IMU_REPORT_PERIOD_US, (unsigned long)imu_init_ms());
+    else
+        snprintf(line, sizeof line, "IMU INIT FAIL %d %s init_ms=%lu\n",
+                 rc, imu_init_err_str(rc), (unsigned long)imu_init_ms());
     out(line);
 
     il_rec_t r;

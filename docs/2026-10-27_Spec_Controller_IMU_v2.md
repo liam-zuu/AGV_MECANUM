@@ -45,12 +45,12 @@
 |---|---|---|
 | `controller/vel_ctrl.c` | wz đo lấy từ encoder; IMU không tham gia | **28/10 đã làm (nhánh `ctrl-imu`, đợt 1):** `imu_fusion.c` (§4, §6), `heading.c` (§5), `vel_ctrl_step` nhận `vel_ctrl_in_t` và gọi mỗi tick kể cả khi motor tắt; kiểm trên fwsim (`hil-framework` nhánh `ctrl-imu`, `fwsim/tests/test_fwsim_imu.py`); biên dịch ESP32, **chưa nạp** |
 | `imu/imu.cpp:69-96` | Thời điểm `esp_timer` + bộ đếm 32 bit mỗi report, hook cho log | Đã có (22/10) |
-| `imu/imu.cpp`, `main.c` | Khởi tạo lỗi chỉ in log rồi chạy tiếp | Chờ làm (§7) |
-| `BNO08xSH2HAL.cpp:143` | Sự kiện `SH2_RESET` của chip chỉ đặt bit nội bộ cho thư viện bật lại report; ứng dụng không biết chip đã reset | Chờ làm (§4.1) |
+| `imu/imu.cpp`, `main.c` | Khởi tạo lỗi chỉ in log rồi chạy tiếp | **28/10 đợt 2 (`ctrl-imu`):** `imu_init()` trả mã lỗi, thư viện chạy trong task riêng, chờ tối đa `T_init`, đạt khi đủ `N_init` report gyro + game RV; `main.c` lỗi thì không bật motor, LED xanh dương nháy + còi 1 dài 5 ngắn; biên dịch, **chưa nạp** |
+| `BNO08xSH2HAL.cpp:143` | Sự kiện `SH2_RESET` của chip chỉ đặt bit nội bộ cho thư viện bật lại report; ứng dụng không biết chip đã reset | **28/10 đợt 2:** `hal_cb` gọi `imu_note_chip_reset()` (`reset_n`, `reset_t_us`); bản weak trong thư viện để link được một mình. Không ghi vào bug log M7 (thêm chức năng, không phải lỗi) |
 | `src/main.c:255` | `#define HIL_BYPASS_MOTOR_ENABLE` đặt cứng cho **mọi** env, kể cả firmware xe: gạt SWA không tắt motor | Đề xuất §7b, chờ Liam duyệt |
 | `ibus/ibus.c:86-97` | Mất byte 20 ms thì `valid = false`; dòng dừng motor khi failsafe còn TODO | Đi cùng §7b |
-| `logger/logger.c:41,90,131` | Hàng đợi không chờ, `sendto` không kiểm lỗi, không đếm | §8 |
-| `test_imu_log.c:67` | In `IMU READY` cả khi khởi tạo lỗi (C2-N1) | §7 |
+| `logger/logger.c:41,90,131` | Hàng đợi không chờ, `sendto` không kiểm lỗi, không đếm | **28/10 đợt 2:** `log_seq`, `log_qdrop`, `log_send_err`, `motor_on` (dòng 10 Hz khi motor tắt), `imu_init`, 21 cột IMU/vòng hướng; dòng `#run_end` ×3 khi motor bật → tắt; PC `tools/agv_logger.py` (hil-framework `ctrl-imu`) đọc 28/37/63 cột, tách dòng `#` ra `<file>.events.txt`; `s02_metrics.py` bỏ dòng `motor_on = 0` |
+| `test_imu_log.c:67` | In `IMU READY` cả khi khởi tạo lỗi (C2-N1) | **28/10 đợt 2:** chỉ in `IMU READY v2 period_us=… init_ms=…` khi đạt, lỗi in `IMU INIT FAIL <mã> …`; `imu_capture.py`, `g2_bno_check.py` đọc được dòng mới |
 | H7 giả lập BNO085 | `hil-framework` `g2-bno-h7`: lõi + SPI4/INT/RST, RPi5 gửi IMU không nhiễu (`rpi5/imu_model.py`) | Đã biên dịch, **chưa nạp, chưa kiểm G2** |
 
 ## 3. Dữ liệu IMU đưa vào controller
@@ -269,3 +269,7 @@ Mỗi metric so với ngưỡng **cùng thứ nguyên**: `δ_wz` = 1/512 rad/s (
 7. **Đếm `psi_reset`:** cộng 1 ngay lúc có sự kiện reset chip / đổi mode khi đang chạy (ưu tiên 1), và lúc đặt lại `ψ_ref` (ưu tiên 4).
 8. **Reset chip lúc khởi động** (`reset_n` ở lần đọc đầu) là mốc, không phải sự kiện; `T_settle` vẫn tính từ đó.
 9. **Đọc IMU trong `control_task`:** gọi thẳng `imu_get()` (có mutex) mỗi tick; bỏ `imu_task` vì bản sao `volatile` cũ có thể bị đọc lệch khi task ưu tiên cao chen vào giữa lúc sao chép.
+10. **Cột log trùng tên (đợt 2):** spec §8 ghi cột `yaw` (rad) và `gz`, nhưng log cũ đã có `yaw` (độ) và `gz` (gyro thô); giữ cột cũ, thêm `yaw_rad`, `gz_fused` (đã trừ bias); `wz` cũ chính là `wz_enc`.
+11. **Dòng tổng kết `#run_end`** gửi khi motor bật → tắt (một "lượt"); mang `seq` của chính dòng đó và `last_data_seq`.
+12. **`s01_openloop` (v2):** ghi report IMU trong lượt thành dòng `I,…` sau các mẫu (bộ đệm riêng 1024 report, đủ 12 s ở 20 Hz); IMU khởi tạo lỗi thì mọi `RUN` trả `ERR imu <mã>`.
+13. **`T_init` tính từ lúc gọi `imu_init()`**, gồm cả thời gian thư viện reset và mở chip; chưa đo thời gian này trên chip thật: lần nạp đầu đọc `init_ms` trong log (`IMU READY … init_ms=`, `OL READY v2 … init_ms=`) để kiểm 2 s có đủ không.

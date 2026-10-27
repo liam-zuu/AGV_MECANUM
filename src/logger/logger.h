@@ -43,13 +43,36 @@ typedef struct {
     uint32_t tick;
     uint32_t dpwm_fl, dpwm_fr, dpwm_rl, dpwm_rr;
     uint32_t sat_fl,  sat_fr,  sat_rl,  sat_rr;
+
+    // ── Spec controller–IMU v2.2 §8 (28/10). Cột cũ giữ tên: wz = wz encoder (FK),
+    //    gz = gyro thô của chip, yaw = độ. ─────────────────────────────────────
+    uint8_t  kind;             // LOG_KIND_DATA / LOG_KIND_RUN_END (dòng tổng kết, gửi 3 lần)
+    // Mất log khép kín: điền trong logger_push / logger_task, người gọi không cần đặt
+    uint32_t log_seq;          // tăng mỗi lần logger_push từ lúc khởi động, không reset
+    uint32_t log_qdrop;        // số dòng mất vì hàng đợi đầy (tích lũy)
+    uint32_t log_send_err;     // số lần sendto lỗi (tích lũy)
+    uint8_t  motor_on;         // 0: dòng nhịp thưa 10 Hz khi motor tắt
+    int8_t   imu_init;         // mã imu_init() (0 = đạt)
+    // Hợp nhất IMU / vòng hướng (imu_fusion.c, heading.c)
+    float    wz_meas, wz_cmd, gz_fused, yaw_rad;
+    float    age_g_ms, age_r_ms;
+    uint32_t gyro_n, rv_n, reset_n;
+    uint8_t  g_valid, r_valid, wz_src, head_on, slip_flag;
+    uint32_t src_switch_count, psi_reset_count, slip_on_count;
+    float    psi_ref, e_psi, r, bias_gz;
 } log_data_t;
+
+#define LOG_KIND_DATA    0
+#define LOG_KIND_RUN_END 1
 
 // ─────────────────────────────────────────
 // API
 // ─────────────────────────────────────────
 void logger_init(void);
-void logger_push(const log_data_t *data);   // non-blocking, gọi từ control_task
+void logger_push(const log_data_t *data);   // non-blocking, gọi từ control_task; điền log_seq, log_qdrop
+uint32_t logger_seq(void);                  // log_seq của dòng push gần nhất
+uint32_t logger_qdrop(void);
+uint32_t logger_send_err(void);
 void logger_task(void *pv);                 // tạo task trong app_main, core 0
 
 #endif // LOGGER_H

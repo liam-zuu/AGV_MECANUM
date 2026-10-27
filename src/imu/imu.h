@@ -10,6 +10,21 @@
 #define IMU_REPORT_PERIOD_US 50000UL
 #endif
 
+// Khởi tạo có hạn (spec controller–IMU v2.2 §7): đạt khi trong IMU_INIT_TIMEOUT_MS (T_init)
+// nhận được ít nhất IMU_INIT_MIN_REPORTS report gyro VÀ game RV. [ĐỀ XUẤT 2 s, 3 mẫu]
+#ifndef IMU_INIT_TIMEOUT_MS
+#define IMU_INIT_TIMEOUT_MS 2000
+#endif
+#ifndef IMU_INIT_MIN_REPORTS
+#define IMU_INIT_MIN_REPORTS 3
+#endif
+
+// Mã trả về của imu_init()
+#define IMU_INIT_OK          0
+#define IMU_INIT_ERR_LIB     1   // BNO08x::initialize() trả false (SPI, GPIO, sh2_open…)
+#define IMU_INIT_ERR_HANG    2   // thư viện chưa khởi tạo xong khi hết T_init (treo, chip không trả lời)
+#define IMU_INIT_ERR_REPORTS 3   // thư viện báo xong nhưng thiếu report gyro / game RV trong T_init
+
 // Report id (khớp sh2.h)
 #define IMU_RPT_ACCEL   0x01
 #define IMU_RPT_GYRO    0x02
@@ -49,9 +64,17 @@ typedef void (*imu_report_hook_t)(uint8_t rpt_id, int64_t t_us, uint32_t n, cons
 extern "C" {
 #endif
 
-void imu_init(void);
+// Chặn tới khi đạt hoặc hết T_init; thư viện chạy trong task riêng nên treo cũng không chặn quá
+// T_init. Trả IMU_INIT_*; lỗi thì người gọi dừng motor và báo (§7). Gọi một lần.
+int         imu_init(void);
+int         imu_init_status(void);         // kết quả imu_init() (−1: chưa gọi / đang chạy)
+uint32_t    imu_init_ms(void);             // thời gian imu_init() đã dùng [ms]
+const char *imu_init_err_str(int code);
 bool imu_get(imu_data_t *out);   // thread-safe copy data ra ngoài
 void imu_set_report_hook(imu_report_hook_t hook);
+
+// Gọi từ thư viện (BNO08xSH2HAL::hal_cb) khi chip báo SH2_RESET: tăng reset_n (§3, §4.1).
+void imu_note_chip_reset(void);
 
 #ifdef __cplusplus
 }

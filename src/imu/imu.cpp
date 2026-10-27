@@ -2,6 +2,7 @@
 #include "BNO08x.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -22,13 +23,40 @@ static SemaphoreHandle_t g_mutex    = nullptr;
 static imu_data_t        g_data     = {};
 static volatile imu_report_hook_t g_hook = nullptr;
 
+// Khởi tạo có hạn: task thư viện báo 0 = đang chạy, 1 = xong, −1 = initialize() lỗi
+static volatile int      g_lib_state   = 0;
+static volatile int      g_init_status = -1;
+static volatile uint32_t g_init_ms     = 0;
+// Reset chip báo lúc không lấy được mutex: cộng dồn ở lần lấy được kế tiếp
+static volatile uint32_t g_reset_pending = 0;
+static volatile int64_t  g_reset_pending_t_us = 0;
+
 extern "C" void imu_set_report_hook(imu_report_hook_t hook) { g_hook = hook; }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
-extern "C" void imu_init(void) {
-    g_mutex = xSemaphoreCreateMutex();
-    configASSERT(g_mutex);
+static void fold_pending_reset(void) {   // gọi khi đang giữ g_mutex
+    if (g_reset_pending) {
+        g_data.reset_n   += g_reset_pending;
+        g_data.reset_t_us = g_reset_pending_t_us;
+        g_reset_pending   = 0;
+    }
+}
 
+// Thư viện gọi trong task dịch vụ SH2 HAL khi chip báo SH2_RESET (kể cả lần reset lúc khởi động)
+extern "C" void imu_note_chip_reset(void) {
+    int64_t t_us = esp_timer_get_time();
+    if (g_mutex && xSemaphoreTake(g_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        fold_pending_reset();
+        g_data.reset_n++;
+        g_data.reset_t_us = t_us;
+        xSemaphoreGive(g_mutex);
+    } else {
+        g_reset_pending_t_us = t_us;
+        g_reset_pending++;
+    }
+}
+
+// ─── Khởi tạo thư viện (task riêng: initialize() có thể treo, G0 v1 R1, R2, R10) ─
+static void imu_lib_init_task(void *pv) {
     // Config GPIO theo hardware đã chốt
     bno08x_config_t cfg;
     cfg.io_mosi    = IMU_MOSI;
@@ -43,6 +71,8 @@ extern "C" void imu_init(void) {
 
     if (!g_imu->initialize()) {
         ESP_LOGE(TAG, "BNO085 init failed! Kiem tra: PS0/PS1 da bridge? Day noi dung chua?");
+        g_lib_state = -1;
+        vTaskDelete(NULL);
         return;
     }
 
@@ -59,6 +89,7 @@ extern "C" void imu_init(void) {
         uint32_t n = 0;
 
         if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(5)) != pdTRUE) return;
+        fold_pending_reset();
 
         if (rpt_id == IMU_RPT_ACCEL) {
             auto a = g_imu->rpt.accelerometer.get();
@@ -96,13 +127,70 @@ extern "C" void imu_init(void) {
         if (hook) hook(rpt_id, t_us, n, v);
     });
 
-    ESP_LOGI(TAG, "BNO085 init OK — accel/gyro/euler @ %lu us", (unsigned long)IMU_REPORT_PERIOD_US);
+    g_lib_state = 1;
+    vTaskDelete(NULL);
+}
+
+// ─── Init có hạn (spec controller–IMU v2.2 §7) ────────────────────────────────
+extern "C" int imu_init(void) {
+    if (!g_mutex) g_mutex = xSemaphoreCreateMutex();
+    configASSERT(g_mutex);
+
+    int64_t t0 = esp_timer_get_time();
+    xTaskCreate(imu_lib_init_task, "imu_init", 6144, NULL, 5, NULL);
+
+    int rc;
+    uint32_t gyro_n = 0, rv_n = 0;
+    while (1) {
+        uint32_t ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+        if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            gyro_n = g_data.gyro_n;
+            rv_n   = g_data.rv_n;
+            xSemaphoreGive(g_mutex);
+        }
+        if (g_lib_state < 0) { rc = IMU_INIT_ERR_LIB; break; }
+        if (g_lib_state > 0 && gyro_n >= IMU_INIT_MIN_REPORTS && rv_n >= IMU_INIT_MIN_REPORTS) {
+            rc = IMU_INIT_OK;
+            break;
+        }
+        if (ms >= IMU_INIT_TIMEOUT_MS) {
+            rc = (g_lib_state == 0) ? IMU_INIT_ERR_HANG : IMU_INIT_ERR_REPORTS;
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    g_init_ms     = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+    g_init_status = rc;
+
+    if (rc == IMU_INIT_OK)
+        ESP_LOGI(TAG, "BNO085 init OK in %lu ms (gyro %lu, rv %lu reports) — accel/gyro/euler @ %lu us",
+                 (unsigned long)g_init_ms, (unsigned long)gyro_n, (unsigned long)rv_n,
+                 (unsigned long)IMU_REPORT_PERIOD_US);
+    else
+        ESP_LOGE(TAG, "IMU_INIT_FAIL %d (%s) after %lu ms: gyro %lu, rv %lu reports",
+                 rc, imu_init_err_str(rc), (unsigned long)g_init_ms,
+                 (unsigned long)gyro_n, (unsigned long)rv_n);
+    return rc;
+}
+
+extern "C" int      imu_init_status(void) { return g_init_status; }
+extern "C" uint32_t imu_init_ms(void)     { return g_init_ms; }
+
+extern "C" const char *imu_init_err_str(int code) {
+    switch (code) {
+    case IMU_INIT_OK:          return "ok";
+    case IMU_INIT_ERR_LIB:     return "library init failed";
+    case IMU_INIT_ERR_HANG:    return "library init did not finish";
+    case IMU_INIT_ERR_REPORTS: return "too few gyro/game RV reports";
+    default:                   return "?";
+    }
 }
 
 // ─── Thread-safe getter ───────────────────────────────────────────────────────
 extern "C" bool imu_get(imu_data_t *out) {
     if (!out || !g_mutex) return false;
     if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(5)) != pdTRUE) return false;
+    fold_pending_reset();
     *out = g_data;
     xSemaphoreGive(g_mutex);
     return out->valid;
