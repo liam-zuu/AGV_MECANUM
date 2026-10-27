@@ -8,13 +8,13 @@
 
 | Mục | Thay đổi | Nguồn |
 |---|---|---|
-| §1b | 4 quyết định Liam 27/10: công tắc nguồn động cơ, LED trắng + còi 1 dài 5 ngắn, ngưỡng dùng tạm, trượt **A + C** (ban đầu chỉ C, đổi 27/10 khuya); đo μ hiệu dụng | Liam 27/10 |
+| §1b | 4 quyết định Liam 27/10: công tắc nguồn động cơ, LED ~~trắng~~ xanh dương nháy (28/10) + còi 1 dài 5 ngắn, ngưỡng dùng tạm, trượt **A + C** (ban đầu chỉ C, đổi 27/10 khuya); đo μ hiệu dụng | Liam 27/10 |
 | §4.1, §3 | Nhận biết chip reset bằng **sự kiện reset** (bộ đếm riêng), bỏ cách "`gyro_n` giảm" (không bao giờ xảy ra); loại mẫu NaN/vô cực | C2-#5 |
 | §4.2 | Dải đo: gyro ±2000 °/s; gia tốc chip ±8 g, frame RPi5 → H7 ±4 g (giữ) | C2-#9 |
 | §4.4 | Điều kiện đứng yên dùng **gia số count mỗi tick**; tuổi mẫu gia tốc; giới hạn bias; ghi giới hạn còn lại | C2-#7 |
 | §5 | Thứ tự ưu tiên khi nhiều sự kiện cùng tick; bật/tắt vòng hướng đo bước PWM như chuyển nguồn | C2-#8 |
 | §6, §6.1 | Cờ chỉ xét khi bánh đang quay; ca X2 phải xác nhận bánh quay (tách trượt với kẹt); tách 2 claim về độ trễ; báo nhầm theo thời lượng; trượt **A + C**; `r_true`, ca theo r mục tiêu, cửa sổ đạt có hạn tắt, giới hạn PWM/thời gian ca X1–X2 | C2-#14, Liam 27/10, V1, V3–V6, V12, V14 |
-| §7 | Báo lỗi: LED trắng + còi; `IMU READY` chỉ in khi khởi tạo đạt | Liam 27/10, C2-N1 |
+| §7 | Báo lỗi: LED ~~trắng~~ xanh dương nháy (28/10) + còi; `IMU READY` chỉ in khi khởi tạo đạt | Liam 27/10, C2-N1 |
 | §7b (mới) | Dừng motor: công tắc nguồn (chính) + SWA/mất sóng chỉ bỏ qua ở env bàn HIL | C2-#4, Liam 27/10 (đề xuất, **chờ duyệt**) |
 | §8 | Đếm mất log khép kín: số thứ tự dòng, đếm lỗi `sendto`, không reset khi đổi controller, có dòng khi motor tắt; mất report trong thư viện | C2-#13, #15 |
 | §10 | fwsim: `v_true` lấy từ trạng thái thân của plant; luật chọn tần số đúng thứ nguyên | C2-#2, #3 |
