@@ -172,7 +172,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
   - env đo `imu_log_*`: chỉ in `IMU READY` khi đạt, lỗi thì in `IMU INIT FAIL <mã>` (C2-N1).
 - Mất IMU **trong lúc chạy** không phải lỗi dừng: chuyển encoder (4.3), tắt vòng hướng (§5), ghi cờ, báo panel.
 
-### 7b. Dừng motor bằng tay điều khiển (đề xuất của Claude, **chờ Liam duyệt**)
+### 7b. Dừng motor bằng tay điều khiển (**Liam duyệt 28/10**, đã làm: AGV commit kế tiếp, env `hil_bench`; chưa nạp)
 
 Liam mở cho gợi ý (§1b.1). Hiện trạng: `main.c:255` đặt cứng `HIL_BYPASS_MOTOR_ENABLE` cho mọi env, nên `swa_on = true` luôn; khi bỏ cờ này, code sẵn có đã làm đúng: `swa_on = has_rc && SWA > 1500`, và `ibus.c` đặt `valid = false` khi 20 ms không có byte, nên mất sóng cũng tắt motor ở tick điều khiển kế tiếp.
 
@@ -249,7 +249,8 @@ Mỗi metric so với ngưỡng **cùng thứ nguyên**: `δ_wz` = 1/512 rad/s (
 
 ## 12. Còn mở
 
-- §7b SWA/mất sóng: **chờ Liam duyệt**; Liam kiểm failsafe bộ thu (§7b.3).
+- ~~§7b chờ Liam duyệt~~ **Liam duyệt 28/10, đã làm (env `hil_bench`)**; còn Liam kiểm failsafe bộ thu (§7b.3).
+- **LED trắng cho lỗi IMU trùng với trạng thái WAITING** (`main.c:150-156`: trắng nháy + bíp ngắn mỗi giây): chờ Liam chọn lại màu/kiểu (phát hiện 28/10).
 - Mọi ngưỡng [ĐỀ XUẤT]: dùng tạm, chốt sau đo nhiễu IMU 20/100 Hz (env `imu_log_20`, `imu_log_100`; checklist).
 - Tần số IMU: theo thí nghiệm §10.
 - Trượt cách A: **làm từ đầu** cùng C (Liam 27/10 khuya, §1b.4); cách viết A (số bước con, vòng trong không numpy) chờ số đo thời gian plant trên Pi (28/10). Đo μ hiệu dụng: Liam duyệt 27/10 (§1b.4); env lái do CODE viết khi chuẩn bị đo.

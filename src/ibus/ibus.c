@@ -93,8 +93,8 @@ void ibus_task(void *pvParam) {
             }
             if (g_ibus_failsafe_count >= IBUS_FAILSAFE_FRAMES) {
                 ESP_LOGW(TAG, "FAILSAFE: %d frames invalid — no signal", g_ibus_failsafe_count);
-                // TODO: gọi emergency stop ở đây nếu cần
-                // motor_set_all(0);
+                // Motor stop on RC loss is done in main.c: valid = false -> has_rc false
+                // -> swa_on false -> motor_enable(false) (spec controller-IMU v2 §7b).
             }
             state = WAIT_H0;  // reset state khi mất tín hiệu
             continue;

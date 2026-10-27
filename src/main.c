@@ -252,7 +252,10 @@ static void control_task(void *pv) {
 
 
         // ── 2. SWA — motor enable/disable ────────────────────────────────────
-        #define HIL_BYPASS_MOTOR_ENABLE  // TODO: remove when testing on real AGV
+        // HIL_BYPASS_MOTOR_ENABLE comes only from env hil_bench (HIL bench has no RC
+        // receiver). Vehicle firmware: SWA enables the motors, and RC loss (ibus
+        // valid = false after 20 ms without a byte) disables them (spec
+        // controller-IMU v2 §7b, Liam approved 27/10).
         #ifdef HIL_BYPASS_MOTOR_ENABLE
                 bool swa_on = true;
         #else
