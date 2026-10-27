@@ -17,6 +17,10 @@
 // Motor enable stays off (EN = 0); on the bench there is no driver anyway.
 // IMU init runs in its own task (every firmware has the IMU, QD 23; the bench
 // ESP32 has no BNO085 and the library can block, bug ESP-BNOLIB-D).
+// Env pwm_hold_drv46 (-DPWM_HOLD_DRV46, 27/10): raises the pad drive strength of
+// GPIO46 to GPIO_DRIVE_CAP_3 after motor_init(). The H7 misreads only the signal
+// from GPIO46 (PWM_CAPTURE run01-run05); this checks whether a weak edge is the
+// cause. Test env only: the car firmware keeps the default drive strength.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #define STEP_MS 5000
@@ -29,6 +33,13 @@ static const int STEPS[][MOTOR_COUNT] = {
 };
 #define N_STEPS (sizeof(STEPS) / sizeof(STEPS[0]))
 
+static void print_drive_caps(const char *tag) {
+    gpio_drive_cap_t c46 = 0, c47 = 0;
+    gpio_get_drive_capability(RL_RPWM, &c46);   /* GPIO46 */
+    gpio_get_drive_capability(RR_RPWM, &c47);   /* GPIO47, reads correctly on the H7 */
+    printf("DRIVE %s: GPIO%d=%d GPIO%d=%d\n", tag, RL_RPWM, (int)c46, RR_RPWM, (int)c47);
+}
+
 static void imu_init_task(void *pv) {
     imu_init();
     vTaskDelete(NULL);
@@ -36,8 +47,17 @@ static void imu_init_task(void *pv) {
 
 void test_pwm_hold(void) {
     motor_init();                         /* EN = 0 */
+    print_drive_caps("default");
+#ifdef PWM_HOLD_DRV46
+    gpio_set_drive_capability(RL_RPWM, GPIO_DRIVE_CAP_3);
+    print_drive_caps("after_set");
+#endif
     xTaskCreate(imu_init_task, "imu_init", 4096, NULL, 3, NULL);
-    printf("PWM HOLD READY v1 step_ms=%d\n", STEP_MS);
+#ifdef PWM_HOLD_DRV46
+    printf("PWM HOLD READY v2 drv46 step_ms=%d\n", STEP_MS);
+#else
+    printf("PWM HOLD READY v2 step_ms=%d\n", STEP_MS);
+#endif
 
     unsigned round = 0;
     while (1) {
