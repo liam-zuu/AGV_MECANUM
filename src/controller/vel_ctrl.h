@@ -21,6 +21,9 @@
 // (imu_fusion.c); setpoint wz đi qua vòng giữ hướng (heading.c); vx, vy từ encoder.
 // Gọi MỖI tick, kể cả khi motor tắt (để theo dõi hợp lệ IMU, bias khi đứng yên, ψ_ref):
 // khi motor_on = false bộ điều khiển không chạy, pwm = 0, bộ đếm metric không đổi.
+// Cạnh motor tắt → bật: reset PID/LADRC (tích phân, ESO, u_prev). Khi motor bật, người gọi
+// áp PWM (sau lớp cắt vật cản) rồi gọi vel_ctrl_applied() với PWM thực áp: điều kiện đứng
+// yên tick sau và bộ đếm metric tính theo PWM đó.
 // ─────────────────────────────────────────
 
 #define CTRL_PID   0
@@ -61,5 +64,6 @@ pid_controller_t  *vel_ctrl_pid(void);
 adrc_controller_t *vel_ctrl_adrc(void);
 
 vel_ctrl_out_t     vel_ctrl_step(const vel_ctrl_in_t *in);
+void               vel_ctrl_applied(const int pwm[4], vel_ctrl_out_t *o);   // PWM thực áp; cập nhật tick, dpwm_sum, sat_ticks của o
 
 #endif // VEL_CTRL_H

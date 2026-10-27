@@ -49,9 +49,12 @@ typedef enum {
 static volatile system_mode_t  g_mode            = MODE_WAITING;
 static volatile bool           g_emergency_stop  = false;
 static volatile bool           g_motor_enabled   = false;
-static volatile int64_t        g_last_traj_us    = 0;
+// g_setpoint (3 trường) và g_last_traj_us (64 bit) ghi ở lõi 0, đọc ở lõi 1: chỉ đọc/ghi
+// trong g_traj_mux để không đọc rách (Codex ctrl-imu #6, Liam duyệt 28/10)
+static portMUX_TYPE             g_traj_mux        = portMUX_INITIALIZER_UNLOCKED;
+static int64_t                  g_last_traj_us    = 0;
 
-static volatile traj_setpoint_t g_setpoint        = {0};
+static traj_setpoint_t          g_setpoint        = {0};
 static volatile float            g_enc_rpm[4]     = {0};
 static volatile int32_t          g_enc_count[4]   = {0};
 static volatile us_data_t        g_us_data        = {0};
@@ -73,8 +76,11 @@ static void traj_task(void *pv) {
         bool fresh = (traj_receiver_source() != TRAJ_SRC_NONE);
         if (fresh) {
             ESP_LOGI(TAG, "traj fresh src=%d vx=%.2f", src, sp.vx);  // thêm
+            int64_t t_us = esp_timer_get_time();
+            taskENTER_CRITICAL(&g_traj_mux);
             g_setpoint     = sp;
-            g_last_traj_us = esp_timer_get_time();
+            g_last_traj_us = t_us;
+            taskEXIT_CRITICAL(&g_traj_mux);
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -424,8 +430,14 @@ static void control_task(void *pv) {
         // ── 5. Xác định mode ─────────────────────────────────────────────────
         static int s_rc_lost_counter = 0;
         bool swc_manual  = has_rc && (rc.channel[CH_SWC] > 1700);
-        bool traj_fresh  = (g_last_traj_us > 0) &&
-                           ((t_now - g_last_traj_us) < TRAJ_TIMEOUT_US);
+        traj_setpoint_t sp_snap;
+        int64_t         traj_us;
+        taskENTER_CRITICAL(&g_traj_mux);         // một bản chụp nhất quán (Codex ctrl-imu #6)
+        sp_snap = g_setpoint;
+        traj_us = g_last_traj_us;
+        taskEXIT_CRITICAL(&g_traj_mux);
+        bool traj_fresh  = (traj_us > 0) &&
+                           ((t_now - traj_us) < TRAJ_TIMEOUT_US);
 
         if (swc_manual) {
             g_mode = MODE_MANUAL;
@@ -458,9 +470,9 @@ static void control_task(void *pv) {
             }
             break;
         case MODE_AUTO:
-            vel.vx = g_setpoint.vx;
-            vel.vy = g_setpoint.vy;
-            vel.wz = g_setpoint.wz;
+            vel.vx = sp_snap.vx;
+            vel.vy = sp_snap.vy;
+            vel.wz = sp_snap.wz;
             break;
         case MODE_WAITING:
         default:
@@ -542,6 +554,7 @@ static void control_task(void *pv) {
 
         // ── 12. Push log ──────────────────────────────────────────────────────
         const int pwm_out[4] = { pwm_fl, pwm_fr, pwm_rl, pwm_rr };
+        vel_ctrl_applied(pwm_out, &vc);   // đứng yên + bộ đếm theo PWM thực áp (Codex ctrl-imu #12)
         push_log(t_now, vel, &vc, pwm_out, &s_imu, true);
     }
 }

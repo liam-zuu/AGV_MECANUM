@@ -39,4 +39,12 @@
 **Liam duyệt 28/10 ở phiên CODE `local_2d8bfc53…`:** #8 = **(c)** (như (a) + cột log `slip_eval`); cho sửa nhóm A. **Đã sửa (nhánh `ctrl-imu`, chưa nạp board):**
 - AGV: #3 spinlock `portMUX` cho pending reset (`imu.cpp`); #4 task thư viện cùng ưu tiên task gọi `imu_init()`; #7 `accel_bad` làm mất hợp lệ cửa sổ đứng yên; N2 `gyro_sat` 31,4 rad/s; #8 (c) `slip_eval` trong `imu_fusion_out_t`; #11 + #8 log thêm `src_switch_dwz`, `bias_updates`, `slip_eval` ở cuối dòng (63 → 66 cột); #15 chụp `s_in` một lần (`test_openloop.c`); spec §0, §4.2, §6, §8, §13.1.
 - hil-framework: #9 `simulate()` đặt `t_age_us` = 2,5 chu kỳ report theo `rate_hz`; #2 (phần đồng ý) `fwsim_imu_init_fail()` + `imu=dict(init_fail=True)` (motor không bao giờ bật, như `g_imu_fail` của `main.c`), `--imu-boot-reset` (đặt theo `init_ms` đo được), ABI 5, cột `slip_eval`; N1 test vòng hướng so IMU `k_psi = 0` với `k_psi = 1`; `agv_logger.py` 66 cột; 5 test mới (#9 ở 100 Hz, #7, N2, đường lỗi khởi tạo, `slip_eval`).
-- Còn chờ Liam: nhóm B (#1, #5, #6, #12, #13, #14).
+- ~~Còn chờ Liam: nhóm B (#1, #5, #6, #12, #13, #14).~~
+
+**Liam 28/10 ở phiên CODE: "push hết, duyệt sửa nhóm B".** Đã sửa (nhánh `ctrl-imu`, chưa nạp board):
+- #1 `vel_ctrl_step`: cạnh motor tắt → bật gọi `pid_reset`, `adrc_reset`, bước PWM đầu tính từ 0. fwsim: test PID và LADRC (giữ bánh, tích phân dồn, tắt rồi bật SWA với setpoint 0: PWM đầu = 0).
+- #5 `tools/s02_metrics.py` `log_loss()`: `missing_pct` theo `log_seq` (mọi dòng, cả dòng motor tắt) + `last_data_seq` của dòng `#run_end` trong `<log>.events.txt` (mất cuối lượt nay tính được); thêm cột `missing_tail_known`; log cũ vẫn tính theo tick. 4 test (`tools/tests/`).
+- #6 `main.c`: `g_setpoint` + `g_last_traj_us` trong spinlock `g_traj_mux`; `control_task` chụp một bản mỗi tick.
+- #12 `vel_ctrl_applied(pwm_thực_áp)` gọi sau lớp cắt vật cản: điều kiện đứng yên tick sau và bộ đếm `tick`/`dpwm`/`sat` tính theo PWM thực áp. fwsim glue gọi cùng thứ tự (không có lớp cắt).
+- #13 `imu_init()`: chỉ đếm report gyro hữu hạn và `|gz| < IMU_GYRO_SAT_RADPS` (31,4, nay định nghĩa một chỗ trong `imu.h`, `imu_fusion.h` dùng lại), game RV hữu hạn, đếm lại từ 0 sau mỗi reset chip; spec §7.
+- #14 spec §6.1: `r = r_true + s·wz_thân`; ca bơm ở μ danh định, chỉ tính khi `|r_true| < r_th/2` suốt lượt. **Outline QĐ 25 (file THESIS) còn câu "`r` biết chính xác, không phụ thuộc A": đã nhắn THESIS sửa.**

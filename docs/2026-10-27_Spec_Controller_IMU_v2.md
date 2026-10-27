@@ -20,6 +20,7 @@
 | §10 | fwsim: `v_true` lấy từ trạng thái thân của plant; luật chọn tần số đúng thứ nguyên | C2-#2, #3 |
 | §10 (v2.1) | Ca "IMU hợp lệ suốt" ở μ danh định + điều kiện `r_true`; sàn tuyệt đối `ΔPWM_min`; thí nghiệm tần số là dữ liệu phát triển | V1, V9, V11 |
 | §11 (mới) | Mục thuộc giả lập H7 (G0): `imu_seq`, dải gia tốc, cận số G3/G4: trạng thái và chỗ xử lý | C2-#9, #10, #12 |
+| §6.1, §7, §9 (28/10, Codex nhóm B, **Liam duyệt ở phiên CODE**) | #14 câu `r` ở §6.1 (`r = r_true + s·wz_thân`); #13 tiêu chí khởi tạo chỉ đếm report dùng được sau reset gần nhất; §9: #1 reset PID/LADRC ở cạnh motor tắt → bật, #12 điều kiện đứng yên và bộ đếm metric theo PWM thực áp sau lớp cắt vật cản (`vel_ctrl_applied`), #6 setpoint + thời điểm quỹ đạo đọc/ghi trong spinlock; #5 `missing_pct` theo `log_seq` + `#run_end` (`tools/s02_metrics.py`) | `docs/review/2026-10-28_Review_ctrl-imu_vong1.md` |
 | §4.2, §6, §8, §13.1 (28/10, Codex rà code `ctrl-imu`) | Ngưỡng bão hòa gyro 34,9 → **31,4 rad/s** (N2: 0,9 × 34,9); cờ trượt khi không xét được theo §13.1 + cột log `slip_eval` (**#8 = (c), Liam duyệt 28/10 ở phiên CODE**); thêm cột log `src_switch_dwz`, `bias_updates` (#11) | `docs/review/2026-10-28_Review_ctrl-imu_vong1.md` |
 
 ## 1. Đã chốt (Liam 22/10)
@@ -139,7 +140,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 
 **Trên SIM/HIL: cách C (bơm có kiểm soát) trên nền plant cách A (Liam 27/10 khuya, §1b.4).**
 
-- **Bơm vào đâu (V2, Liam chốt (a)):** **ở đầu vào mô hình gyro**: gyro giả thấy `(1 − s)·wz_thân` trong khoảng bơm, trạng thái plant không đổi, nên `r` biết chính xác và không phụ thuộc A. Luận văn gọi là *controlled IMU–encoder inconsistency injection*; trượt vật lý để cho A. *(Phương án (b) bơm vào trạng thái thân: không chọn.)* Vì bơm nằm ở mô hình IMU, chỗ code là `rpi5/imu_model.py` (dùng chung RPi5 và fwsim), không phải `plant_step.py`. Đây là năng lực của bộ HIL, thuộc claim C7 Ch. 3 (V8, Liam chốt (a); THESIS sửa `.tex` sau khi Liam duyệt câu chữ). Khoảng bơm `[t0, t0 + T_inj]` khóa trước. Python plant (RPi5) và fwsim dùng chung code. C là **tín hiệu thử**, không kiểm fidelity.
+- **Bơm vào đâu (V2, Liam chốt (a)):** **ở đầu vào mô hình gyro**: gyro giả thấy `(1 − s)·wz_thân` trong khoảng bơm, trạng thái plant không đổi. ~~nên `r` biết chính xác và không phụ thuộc A~~ *[SỬA 28/10, Codex `ctrl-imu` #14, Liam duyệt]:* phần bơm `s·wz_thân` biết chính xác và không phụ thuộc A; còn `r` tổng là `r = r_true + s·wz_thân` (bỏ qua lượng tử encoder), với `r_true` là trượt thật của plant A. Vì vậy các ca bơm chạy ở **μ danh định** và chỉ tính khi `|r_true| < r_th/2` suốt lượt (như ca không bơm, V1), để `r` gần bằng phần bơm. Luận văn gọi là *controlled IMU–encoder inconsistency injection*; trượt vật lý để cho A. *(Phương án (b) bơm vào trạng thái thân: không chọn.)* Vì bơm nằm ở mô hình IMU, chỗ code là `rpi5/imu_model.py` (dùng chung RPi5 và fwsim), không phải `plant_step.py`. Đây là năng lực của bộ HIL, thuộc claim C7 Ch. 3 (V8, Liam chốt (a); THESIS sửa `.tex` sau khi Liam duyệt câu chữ). Khoảng bơm `[t0, t0 + T_inj]` khóa trước. Python plant (RPi5) và fwsim dùng chung code. C là **tín hiệu thử**, không kiểm fidelity.
 - **Trượt thật của plant A (V1):** plant A ghi thêm `r_true = wz_suy_từ_bánh − wz_thân` mỗi bước (từ trạng thái plant). Mỗi lần cờ bật được phân loại **đúng** (`|r_true| ≥ r_th/2`, hoặc đang trong cửa sổ bơm) hay **nhầm**.
 - **Đặt ca theo biên độ r mục tiêu (V3):** ca dưới ngưỡng `r ≈ 0,5·r_th`, ca trên ngưỡng `r ≥ 2·r_th`; `s` của từng bài tính sau khi đo nhiễu (K1, ra `σ_gz`), khóa cùng các ngưỡng khác (QĐ 21).
 
@@ -165,7 +166,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 
 ## 7. Khởi tạo và báo lỗi
 
-- `imu_init()` trả mã lỗi. Khởi tạo **đạt** khi trong `T_init` [ĐỀ XUẤT: 2 s] nhận được ít nhất `N_init` report **gyro và game RV** [ĐỀ XUẤT: 3 mỗi loại], không chỉ dựa vào `sh2_open` (thư viện có thể báo thành công giả hoặc treo: G0 v1 R1, R2, R10).
+- `imu_init()` trả mã lỗi. Khởi tạo **đạt** khi trong `T_init` [ĐỀ XUẤT: 2 s] nhận được ít nhất `N_init` report **gyro và game RV** [ĐỀ XUẤT: 3 mỗi loại] **dùng được** (gyro hữu hạn, `|gz|` dưới ngưỡng bão hòa §4.2; game RV hữu hạn), **đếm từ lần reset chip gần nhất** (Codex `ctrl-imu` #13, Liam duyệt 28/10), không chỉ dựa vào `sh2_open` (thư viện có thể báo thành công giả hoặc treo: G0 v1 R1, R2, R10).
 - Watchdog: `imu_init` chạy trong task riêng có hạn `T_init`; quá hạn là lỗi.
 - Lỗi khởi tạo → không bật motor, ở trạng thái lỗi:
   - **xe thật (Liam 27/10):** LED RGB (GPIO48) **xanh dương nháy** (Liam 28/10) + còi (GPIO17) **1 tiếng dài rồi 5 tiếng ngắn**, lặp [ĐỀ XUẤT: dài 600 ms, nghỉ 200 ms, ngắn 120 ms bật / 120 ms tắt, lặp mỗi 3 s];
@@ -209,6 +210,7 @@ Hệ quả: nạp firmware xe thì phải bật SWA mới chạy motor; nạp b�
 - `controller/imu_fusion.c/.h` (**C thuần**, chạy được trong fwsim): kiểm hợp lệ theo mẫu mới và sự kiện reset, chuyển nguồn, bias khi đứng yên, cờ trượt.
 - `controller/heading.c/.h` (C thuần): vòng giữ hướng, bảng ưu tiên §5.
 - `vel_ctrl_step` nhận thêm mẫu IMU (giá trị, `*_t_us`, `*_n`, `reset_n`) và trả các cột log §8.
+- *(28/10, Codex nhóm B, Liam duyệt)* Cạnh motor tắt → bật: `vel_ctrl_step` reset PID/LADRC (tích phân, ESO, `u_prev`), bước PWM đầu tính từ 0 (#1). Sau lớp cắt vật cản, `main.c` gọi `vel_ctrl_applied(pwm_thực_áp)`: điều kiện đứng yên (§4.4) và bộ đếm metric (S02) tính theo PWM thực áp, không theo lệnh (#12). `g_setpoint` và `g_last_traj_us` chỉ đọc/ghi trong spinlock (#6).
 - `imu/imu.cpp`: đọc chip, gắn thời điểm/bộ đếm (đã có), khởi tạo có hạn (§7), bộ đếm reset (§3).
 - Thư viện: thêm 1 lời gọi tăng `reset_n` ở `BNO08xSH2HAL.cpp:143`. Lõi giả lập `bnoemu_pc` (G1) không biên dịch file này nên không ảnh hưởng.
 - `led_buzzer`: mẫu báo lỗi IMU (§7).

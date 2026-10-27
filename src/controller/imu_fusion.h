@@ -44,7 +44,7 @@ typedef struct {
 #define IMU_FUSION_PARAMS_DEFAULT {                     \
     .t_age_us    = (int64_t)(IMU_REPORT_PERIOD_US * 5 / 2), \
     .t_settle_us = 500000,                              \
-    .gyro_sat    = 31.4f,                               \
+    .gyro_sat    = IMU_GYRO_SAT_RADPS,                  \
     .n_back      = 3,                                   \
     .sigma_gz    = 0.0f,                                \
     .sigma_a     = 0.0f,                                \

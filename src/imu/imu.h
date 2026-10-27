@@ -10,8 +10,14 @@
 #define IMU_REPORT_PERIOD_US 50000UL
 #endif
 
+// |gz| coi là bão hòa: 0,9 × 2000 °/s (dải gyro hiện tại). Dùng chung cho imu_fusion (hợp lệ)
+// và tiêu chí khởi tạo bên dưới.
+#define IMU_GYRO_SAT_RADPS 31.4f
+
 // Khởi tạo có hạn (spec controller–IMU v2.2 §7): đạt khi trong IMU_INIT_TIMEOUT_MS (T_init)
 // nhận được ít nhất IMU_INIT_MIN_REPORTS report gyro VÀ game RV. [ĐỀ XUẤT 2 s, 3 mẫu]
+// Chỉ đếm report dùng được (gyro hữu hạn và |gz| < IMU_GYRO_SAT_RADPS; game RV hữu hạn), sau
+// lần reset chip gần nhất (Codex ctrl-imu #13, Liam duyệt 28/10).
 #ifndef IMU_INIT_TIMEOUT_MS
 #define IMU_INIT_TIMEOUT_MS 2000
 #endif

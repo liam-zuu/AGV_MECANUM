@@ -5,7 +5,8 @@ static pid_controller_t  g_pid;
 static adrc_controller_t g_adrc;
 static int               g_mode = CTRL_MODE;
 static bool              g_mode_event;      // đổi mode chờ báo cho vòng hướng (§5 ưu tiên 1)
-static bool              g_pwm_zero = true; // PWM = 0 cả 4 bánh ở tick trước (điều kiện đứng yên)
+static bool              g_pwm_zero = true; // PWM thực áp = 0 cả 4 bánh ở tick trước (điều kiện đứng yên)
+static bool              g_motor_prev;      // motor_on ở tick trước (cạnh tắt → bật: reset bộ điều khiển)
 
 // Bộ đếm metric (xem vel_ctrl.h)
 static uint32_t g_tick;
@@ -26,6 +27,7 @@ void vel_ctrl_init(void) {
     g_mode = CTRL_MODE;
     g_mode_event = false;
     g_pwm_zero = true;
+    g_motor_prev = false;
     counters_reset();
 }
 
@@ -81,12 +83,24 @@ vel_ctrl_out_t vel_ctrl_step(const vel_ctrl_in_t *in) {
     heading_step(&hi, &o.head);
     o.wz_cmd = o.head.wz_cmd;
 
+    // Bộ đếm metric hiện tại; khi motor bật, vel_ctrl_applied() cập nhật sau khi biết PWM thực áp
+    o.tick = g_tick;
+    for (int i = 0; i < 4; i++) { o.dpwm_sum[i] = g_dpwm_sum[i]; o.sat_ticks[i] = g_sat_ticks[i]; }
+
     if (!in->motor_on) {
         g_pwm_zero = true;
-        o.tick = g_tick;
-        for (int i = 0; i < 4; i++) { o.dpwm_sum[i] = g_dpwm_sum[i]; o.sat_ticks[i] = g_sat_ticks[i]; }
+        g_motor_prev = false;
         return o;
     }
+
+    // Motor tắt → bật (SWA, hết lỗi): bỏ tích phân PID, trạng thái ESO và u_prev cũ (Codex
+    // ctrl-imu #1, Liam duyệt 28/10). Lúc motor tắt PWM thực áp là 0, nên bước PWM đầu tính từ 0.
+    if (!g_motor_prev) {
+        pid_reset(&g_pid);
+        adrc_reset(&g_adrc);
+        for (int i = 0; i < 4; i++) g_pwm_prev[i] = 0;
+    }
+    g_motor_prev = true;
 
     // ── 9. Controller ─────────────────────────────────────────────────────
     float wz_meas = o.imu.wz_meas;
@@ -106,19 +120,23 @@ vel_ctrl_out_t vel_ctrl_step(const vel_ctrl_in_t *in) {
     o.pwm[1] = kinematics_radps_to_pwm(wheels.fr);
     o.pwm[2] = kinematics_radps_to_pwm(wheels.rl);
     o.pwm[3] = kinematics_radps_to_pwm(wheels.rr);
-    g_pwm_zero = o.pwm[0] == 0 && o.pwm[1] == 0 && o.pwm[2] == 0 && o.pwm[3] == 0;
-
-    // ── Bộ đếm metric ─────────────────────────────────────────────────────
-    g_tick++;
-    for (int i = 0; i < 4; i++) {
-        int d = o.pwm[i] - g_pwm_prev[i];
-        g_dpwm_sum[i] += (uint32_t)(d < 0 ? -d : d);
-        if (o.pwm[i] >= PWM_MAX || o.pwm[i] <= -PWM_MAX) g_sat_ticks[i]++;
-        g_pwm_prev[i] = o.pwm[i];
-        o.dpwm_sum[i]  = g_dpwm_sum[i];
-        o.sat_ticks[i] = g_sat_ticks[i];
-    }
-    o.tick = g_tick;
 
     return o;
+}
+
+// PWM thực áp sau mọi lớp cắt của main.c (vật cản), gọi mỗi tick motor bật, ngay sau
+// motor_set(). Điều kiện đứng yên và bộ đếm metric tính theo PWM này, không theo lệnh
+// (Codex ctrl-imu #12, Liam duyệt 28/10).
+void vel_ctrl_applied(const int pwm[4], vel_ctrl_out_t *o) {
+    g_pwm_zero = pwm[0] == 0 && pwm[1] == 0 && pwm[2] == 0 && pwm[3] == 0;
+    g_tick++;
+    for (int i = 0; i < 4; i++) {
+        int d = pwm[i] - g_pwm_prev[i];
+        g_dpwm_sum[i] += (uint32_t)(d < 0 ? -d : d);
+        if (pwm[i] >= PWM_MAX || pwm[i] <= -PWM_MAX) g_sat_ticks[i]++;
+        g_pwm_prev[i] = pwm[i];
+        o->dpwm_sum[i]  = g_dpwm_sum[i];
+        o->sat_ticks[i] = g_sat_ticks[i];
+    }
+    o->tick = g_tick;
 }

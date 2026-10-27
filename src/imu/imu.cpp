@@ -6,6 +6,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include <cmath>
 
 static const char *TAG = "IMU";
 
@@ -32,6 +33,8 @@ static volatile uint32_t g_init_ms     = 0;
 static portMUX_TYPE      g_pending_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t          g_reset_pending = 0;
 static int64_t           g_reset_pending_t_us = 0;
+// Tiêu chí khởi tạo (§7, Codex #13): report dùng được kể từ lần reset chip gần nhất (giữ g_mutex)
+static uint32_t          g_init_gyro_ok = 0, g_init_rv_ok = 0;
 
 extern "C" void imu_set_report_hook(imu_report_hook_t hook) { g_hook = hook; }
 
@@ -44,6 +47,7 @@ static void fold_pending_reset(void) {   // gọi khi đang giữ g_mutex
     if (n) {
         g_data.reset_n   += n;
         g_data.reset_t_us = t_us;
+        g_init_gyro_ok = g_init_rv_ok = 0;
     }
 }
 
@@ -54,6 +58,7 @@ extern "C" void imu_note_chip_reset(void) {
         fold_pending_reset();
         g_data.reset_n++;
         g_data.reset_t_us = t_us;
+        g_init_gyro_ok = g_init_rv_ok = 0;
         xSemaphoreGive(g_mutex);
     } else {
         taskENTER_CRITICAL(&g_pending_mux);
@@ -115,6 +120,7 @@ static void imu_lib_init_task(void *pv) {
             g_data.gyro_t_us = t_us;
             n = ++g_data.gyro_n;
             v[0] = g.x; v[1] = g.y; v[2] = g.z;
+            if (std::isfinite(g.z) && std::fabs(g.z) < IMU_GYRO_SAT_RADPS) g_init_gyro_ok++;
         } else if (rpt_id == IMU_RPT_GAME_RV) {
             auto e = g_imu->rpt.rv_game.get_euler();
             g_data.roll  = e.x;
@@ -123,6 +129,7 @@ static void imu_lib_init_task(void *pv) {
             g_data.rv_t_us = t_us;
             n = ++g_data.rv_n;
             v[0] = e.x; v[1] = e.y; v[2] = e.z;
+            if (std::isfinite(e.z)) g_init_rv_ok++;
         } else {
             xSemaphoreGive(g_mutex);
             return;   // report khác (hoặc id 0 lúc task khởi động): bỏ qua
@@ -154,8 +161,9 @@ extern "C" int imu_init(void) {
     while (1) {
         uint32_t ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
         if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-            gyro_n = g_data.gyro_n;
-            rv_n   = g_data.rv_n;
+            fold_pending_reset();
+            gyro_n = g_init_gyro_ok;   // report dùng được sau reset gần nhất (§7)
+            rv_n   = g_init_rv_ok;
             xSemaphoreGive(g_mutex);
         }
         if (g_lib_state < 0) { rc = IMU_INIT_ERR_LIB; break; }
@@ -173,11 +181,11 @@ extern "C" int imu_init(void) {
     g_init_status = rc;
 
     if (rc == IMU_INIT_OK)
-        ESP_LOGI(TAG, "BNO085 init OK in %lu ms (gyro %lu, rv %lu reports) — accel/gyro/euler @ %lu us",
+        ESP_LOGI(TAG, "BNO085 init OK in %lu ms (gyro %lu, rv %lu usable reports since last reset) — accel/gyro/euler @ %lu us",
                  (unsigned long)g_init_ms, (unsigned long)gyro_n, (unsigned long)rv_n,
                  (unsigned long)IMU_REPORT_PERIOD_US);
     else
-        ESP_LOGE(TAG, "IMU_INIT_FAIL %d (%s) after %lu ms: gyro %lu, rv %lu reports",
+        ESP_LOGE(TAG, "IMU_INIT_FAIL %d (%s) after %lu ms: gyro %lu, rv %lu usable reports since last reset",
                  rc, imu_init_err_str(rc), (unsigned long)g_init_ms,
                  (unsigned long)gyro_n, (unsigned long)rv_n);
     return rc;
