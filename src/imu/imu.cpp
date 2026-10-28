@@ -99,6 +99,21 @@ extern "C" void imu_init(void) {
     ESP_LOGI(TAG, "BNO085 init OK — accel/gyro/euler @ %lu us", (unsigned long)IMU_REPORT_PERIOD_US);
 }
 
+#ifdef TEST_IMU_TRACE
+// ─── Kịch bản trace (env imu_trace_*): đổi chu kỳ cả 3 report, xung RST ───────
+extern "C" bool imu_trace_set_period(uint32_t period_us) {
+    if (!g_imu) return false;
+    bool ok = g_imu->rpt.accelerometer.enable(period_us);
+    ok = g_imu->rpt.cal_gyro.enable(period_us) && ok;
+    ok = g_imu->rpt.rv_game.enable(period_us) && ok;
+    return ok;
+}
+
+extern "C" bool imu_trace_hard_reset(void) {
+    return g_imu && g_imu->hard_reset();   // thư viện tự bật lại các report sau reset
+}
+#endif
+
 // ─── Thread-safe getter ───────────────────────────────────────────────────────
 extern "C" bool imu_get(imu_data_t *out) {
     if (!out || !g_mutex) return false;

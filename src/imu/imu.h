@@ -48,6 +48,12 @@ void imu_init(void);
 bool imu_get(imu_data_t *out);   // thread-safe copy data ra ngoài
 void imu_set_report_hook(imu_report_hook_t hook);
 
+#ifdef TEST_IMU_TRACE
+// Chỉ cho env imu_trace_* (QĐ 26, G0 v1 §7): kịch bản S3 đổi chu kỳ, S4 xung RST giữa chừng.
+bool imu_trace_set_period(uint32_t period_us);
+bool imu_trace_hard_reset(void);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

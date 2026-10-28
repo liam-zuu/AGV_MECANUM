@@ -5,6 +5,14 @@
 
 #include "BNO08xSH2HAL.hpp"
 #include "BNO08x.hpp"
+#include "BNO08xTrace.h" // empty unless -DBNO_TRACE (thesis trace envs, 28/10/2026)
+
+#ifdef BNO_TRACE
+static inline uint32_t bt_now()
+{
+    return (uint32_t) esp_timer_get_time();
+}
+#endif
 
 BNO08x* BNO08xSH2HAL::imu;
 
@@ -61,6 +69,19 @@ int BNO08xSH2HAL::spi_read(sh2_Hal_t* self, uint8_t* pBuffer, unsigned len, uint
     if (!spi_wait_for_int())
         return 0;
 
+#ifdef BNO_TRACE
+    uint8_t bt_flags = 0;
+    uint16_t bt_delay = bno_trace_take_host_delay();
+    if (bt_delay)
+    {
+        vTaskDelay(pdMS_TO_TICKS(bt_delay));
+        bt_flags |= BT_F_DELAYED;
+    }
+    if (gpio_get_level(imu->imu_config.io_int) == 0)
+        bt_flags |= BT_F_INT_LOW;
+    uint32_t bt_cs = bt_now();
+#endif
+
     // assert chip select
     gpio_set_level(imu->imu_config.io_cs, 0);
 
@@ -69,6 +90,9 @@ int BNO08xSH2HAL::spi_read(sh2_Hal_t* self, uint8_t* pBuffer, unsigned len, uint
     if ((packet_sz > len) || (packet_sz == 0))
     {
         gpio_set_level(imu->imu_config.io_cs, 1);
+#ifdef BNO_TRACE
+        bno_trace_rec(BT_RD, (uint16_t) (bt_now() - bt_cs), packet_sz, bt_flags | BT_F_FAIL, pBuffer, 4, bt_cs);
+#endif
         return 0;
     }
 
@@ -76,6 +100,12 @@ int BNO08xSH2HAL::spi_read(sh2_Hal_t* self, uint8_t* pBuffer, unsigned len, uint
 
     // de-assert chip select
     gpio_set_level(imu->imu_config.io_cs, 1);
+
+#ifdef BNO_TRACE
+    // the body read clocks packet_sz bytes after the 4-byte header, so 4 + packet_sz bytes are on the wire
+    bno_trace_rec(BT_RD, (uint16_t) (bt_now() - bt_cs), PARSE_PACKET_LENGTH(pBuffer) & ~0x8000U,
+            bt_flags | (packet_sz ? 0 : BT_F_FAIL), pBuffer, packet_sz ? (uint16_t) (packet_sz + 4) : 4, bt_cs);
+#endif
 
     return packet_sz;
 }
@@ -102,13 +132,27 @@ int BNO08xSH2HAL::spi_write(sh2_Hal_t* self, uint8_t* pBuffer, unsigned len)
     imu->spi_transaction.rx_buffer = NULL;
     imu->spi_transaction.flags = 0;
 
+#ifdef BNO_TRACE
+    uint8_t bt_flags = (gpio_get_level(imu->imu_config.io_int) == 0) ? BT_F_INT_LOW : 0;
+    uint32_t bt_cs = bt_now();
+#endif
+
     gpio_set_level(imu->imu_config.io_cs, 0);                         // assert chip select
 
     // send data packet
     if(spi_device_polling_transmit(imu->spi_hdl, &imu->spi_transaction) != ESP_OK)
+    {
+#ifdef BNO_TRACE
+        bno_trace_rec(BT_WR, (uint16_t) (bt_now() - bt_cs), len, bt_flags | BT_F_FAIL, pBuffer, len, bt_cs);
+#endif
         return 0;
+    }
 
     gpio_set_level(imu->imu_config.io_cs, 1);                         // de-assert chip select
+
+#ifdef BNO_TRACE
+    bno_trace_rec(BT_WR, (uint16_t) (bt_now() - bt_cs), len, bt_flags, pBuffer, len, bt_cs);
+#endif
 
     return len;
 }
@@ -176,6 +220,9 @@ bool BNO08xSH2HAL::spi_wait_for_int()
 {
     if (imu->wait_for_hint() != ESP_OK)
     {
+#ifdef BNO_TRACE
+        bno_trace_rec(BT_TMO, 0, 0, 0, nullptr, 0, bt_now());
+#endif
         hardware_reset();
         return false;
     }

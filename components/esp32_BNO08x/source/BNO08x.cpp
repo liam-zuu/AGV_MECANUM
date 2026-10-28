@@ -5,6 +5,10 @@
 
 #include "BNO08x.hpp"
 #include "BNO08xPrivateTypes.hpp"
+#include "BNO08xTrace.h" // empty unless -DBNO_TRACE (thesis trace envs, 28/10/2026)
+#ifdef BNO_TRACE
+#include <esp_timer.h>
+#endif
 
 using namespace BNO08xPrivateTypes;
 
@@ -1846,6 +1850,9 @@ esp_err_t BNO08x::wait_for_reset()
  */
 void BNO08x::toggle_reset()
 {
+#ifdef BNO_TRACE
+    bno_trace_rec(BT_RST, 0, 0, 0, nullptr, 0, (uint32_t) esp_timer_get_time());
+#endif
     gpio_intr_disable(imu_config.io_int); // disable interrupts before reset
 
     gpio_set_level(imu_config.io_cs, 1);
@@ -2100,6 +2107,10 @@ void IRAM_ATTR BNO08x::hint_handler(void* arg)
     BaseType_t xHighPriorityTaskWoken = pdFALSE;
     BNO08x* imu = (BNO08x*) arg; // cast argument received by gpio_isr_handler_add ("this" pointer
                                  // to imu object created by constructor call)
+
+#ifdef BNO_TRACE
+    bno_trace_rec(BT_INT, 0, 0, 0, nullptr, 0, (uint32_t) esp_timer_get_time());
+#endif
 
     // notify any tasks/function calls waiting for HINT assertion
     xEventGroupSetBitsFromISR(imu->sync_ctx.evt_grp_task, EVT_GRP_BNO08x_TASK_HINT_ASSRT_BIT, &xHighPriorityTaskWoken);
