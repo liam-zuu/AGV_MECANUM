@@ -68,18 +68,18 @@ static volatile bool g_imu_fail         = false;   // imu_init() lỗi: motor t�
 // ─────────────────────────────────────────
 static void traj_task(void *pv) {
     while (1) {
-        traj_setpoint_t sp  = traj_receiver_get();
-        traj_source_t   src = traj_receiver_source();
-        /* traj_receiver_get() trả về {0} khi timeout.
-         * Dùng g_last_us trong traj_receiver để quyết định fresh/stale
-         * thay vì check source. */
-        bool fresh = (traj_receiver_source() != TRAJ_SRC_NONE);
+        /* Một bản chụp của gói cuối (setpoint, nguồn, thời điểm nhận). g_last_traj_us lấy
+         * thời điểm NHẬN gói, không phải lúc task này thấy nó: control_task tính hết hạn
+         * TRAJ_TIMEOUT_US từ gói thật cuối cùng, hết timeout kép ~400 ms (DUT nhóm 1,
+         * Liam duyệt Q5a 29/10) */
+        traj_snapshot_t s;
+        traj_receiver_snapshot(&s);
+        bool fresh = traj_receiver_is_fresh(&s, esp_timer_get_time());
         if (fresh) {
-            ESP_LOGI(TAG, "traj fresh src=%d vx=%.2f", src, sp.vx);  // thêm
-            int64_t t_us = esp_timer_get_time();
+            ESP_LOGI(TAG, "traj fresh src=%d vx=%.2f", s.src, s.sp.vx);  // thêm
             taskENTER_CRITICAL(&g_traj_mux);
-            g_setpoint     = sp;
-            g_last_traj_us = t_us;
+            g_setpoint     = s.sp;
+            g_last_traj_us = s.t_rx_us;
             taskEXIT_CRITICAL(&g_traj_mux);
         }
         vTaskDelay(pdMS_TO_TICKS(10));
