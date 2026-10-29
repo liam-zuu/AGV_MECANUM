@@ -34,6 +34,7 @@ static const char *TAG = "S06";
 //   S,qseq,t_us,run,ev_qdrop,enc_ovf,imu_rx,imu_cbq,imu_mutex,gyro_gap_max_us,relay_ok,relay_bad,
 //     log_qdrop,log_send_err,ev_send_err                    thống kê mỗi 1 s
 //   #fw,..  #run_start,..  #run_end,..  #ack,..             dòng văn bản, cuối dòng có qseq=
+//                                                           (#run_start có imu_init, imu_init_ms: T4 (1))
 // qseq: tăng liên tục cho mọi dòng trừ E; eseq: riêng dòng E. Pi thấy chỗ hở = mất trên đường UDP.
 // Mất trước khi gửi (hàng đợi đầy, vòng đệm encoder đầy) đếm ở ev_qdrop, enc_ovf; #run_end báo số
 // tăng trong lượt (*_run); > 0 thì lượt không đủ điều kiện đo (spec S06 §4.3). Sự kiện IMU chỉ đẩy khi
@@ -338,11 +339,13 @@ static void start_run(int64_t t_now, int prof, int64_t dur_us, bool auto_end) {
     s_t_start    = t_now;
     s_force_apply = true;
     s_run_active = true;
+    // imu_init = mã imu_init() (0 = IMU_INIT_OK), imu_init_ms = thời gian khởi tạo: spec S06 T4 (1), Liam
+    // duyệt 29/10 ở phiên THESIS ("Theo khuyến nghị"), vì dòng "BNO085 init OK" chỉ ra cổng serial
     push_text("run_start,first_data_seq=%lu,timestamp_us=%lld,profile=%s,duration_s=%lld,auto_end=%d,"
-              "fw=%s,dirty=%d,env=%s,cfg_hash=%08lx",
+              "fw=%s,dirty=%d,env=%s,cfg_hash=%08lx,imu_init=%d,imu_init_ms=%lu",
               (unsigned long)(logger_seq() + 1), (long long)t_now, PROF_NAME[prof],
               (long long)(dur_us / 1000000LL), auto_end, FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV,
-              (unsigned long)fnv1a(all));
+              (unsigned long)fnv1a(all), imu_init_status(), (unsigned long)imu_init_ms());
     push_text("cfg,%s", cfg);
 }
 
