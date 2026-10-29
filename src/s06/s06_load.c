@@ -11,11 +11,13 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include "driver/temperature_sensor.h"
 #include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include <fcntl.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -32,7 +34,9 @@ static const char *TAG = "S06";
 //   P,qseq,t_before,t_after,wheel,speed,gpioA,cmpA,gpioB,cmpB   một lần ghi compare [L7-13]
 //   E,eseq,t_before,t_after,fl,fr,rl,rr                     đọc count 4 bánh, mỗi 1 ms trong lượt [Y1, Z6]
 //   S,qseq,t_us,run,ev_qdrop,enc_ovf,imu_rx,imu_cbq,imu_mutex,gyro_gap_max_us,relay_ok,relay_bad,
-//     log_qdrop,log_send_err,ev_send_err                    thống kê mỗi 1 s
+//     log_qdrop,log_send_err,ev_send_err,temp_c             thống kê mỗi 1 s; temp_c: cảm biến nhiệt trong
+//                                                           chip ESP32-S3, °C, "nan" khi không đọc được
+//                                                           (T5, Liam 30/10; không phải nhiệt độ môi trường)
 //   #fw,..  #run_start,..  #run_end,..  #ack,..             dòng văn bản, cuối dòng có qseq=
 //                                                           (#run_start có imu_init, imu_init_ms: T4 (1))
 // qseq: tăng liên tục cho mọi dòng trừ E; eseq: riêng dòng E. Pi thấy chỗ hở = mất trên đường UDP.
@@ -68,6 +72,7 @@ typedef struct {
 } s06_ev_t;
 
 static QueueHandle_t     s_q;
+static temperature_sensor_handle_t s_tsens;   // NULL khi cài không được: dòng S ghi "nan"
 static volatile bool     s_tx_ready;
 static volatile uint32_t s_ev_qdrop;
 static volatile uint32_t s_ev_send_err;
@@ -198,14 +203,16 @@ static void format_stat(int64_t t_now) {
     uint32_t ok = 0, bad = 0;
     int64_t last = 0;
     traj_receiver_stats(&ok, &bad, &last);
-    char l[220];
-    int n = snprintf(l, sizeof l, "S,%lu,%lld,%d,%lu,%lu,%lu,%lu,%lu,%lld,%lu,%lu,%lu,%lu,%lu\n",
+    float temp_c = NAN;
+    if (!s_tsens || temperature_sensor_get_celsius(s_tsens, &temp_c) != ESP_OK) temp_c = NAN;
+    char l[240];
+    int n = snprintf(l, sizeof l, "S,%lu,%lld,%d,%lu,%lu,%lu,%lu,%lu,%lld,%lu,%lu,%lu,%lu,%lu,%.1f\n",
                      (unsigned long)++s_qseq, (long long)t_now, (int)s_run_active,
                      (unsigned long)s_ev_qdrop, (unsigned long)s_enc_ovf,
                      (unsigned long)d.rx_queue, (unsigned long)d.cb_queue, (unsigned long)d.cb_mutex,
                      (long long)s_gyro_gap_max, (unsigned long)ok, (unsigned long)bad,
                      (unsigned long)logger_qdrop(), (unsigned long)logger_send_err(),
-                     (unsigned long)s_ev_send_err);
+                     (unsigned long)s_ev_send_err, (double)temp_c);
     append(l, n < (int)sizeof l ? n : (int)sizeof l - 1);
 }
 
@@ -441,6 +448,13 @@ void s06_init(void) {
     configASSERT(s_q);
     esp_wifi_set_ps(WIFI_PS_NONE);   // tắt tiết kiệm điện WiFi: luồng sự kiện ~100 kB/s [ĐỀ XUẤT]
     imu_set_event_hook(imu_hook);
+
+    // Nhiệt độ chip cho T5 (Liam 30/10); lỗi thì chỉ báo, lượt đo vẫn chạy
+    temperature_sensor_config_t tc = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+    if (temperature_sensor_install(&tc, &s_tsens) != ESP_OK || temperature_sensor_enable(s_tsens) != ESP_OK) {
+        ESP_LOGW(TAG, "temperature sensor unavailable, S lines carry nan");
+        s_tsens = NULL;
+    }
 
     const esp_timer_create_args_t ta = { .callback = enc_timer_cb, .name = "s06_enc",
                                          .dispatch_method = ESP_TIMER_TASK };
