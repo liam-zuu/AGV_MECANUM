@@ -1,6 +1,7 @@
 #include "motor.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
+#include "esp_timer.h"
 
 static const char *TAG = "MOTOR";
 
@@ -121,6 +122,13 @@ void motor_init(void) {
 // }
 
 void motor_set(motor_id_t id, int speed) {
+    motor_set_info(id, speed, NULL);
+}
+
+// Như motor_set, ghi thêm esp_timer ngay trước lệnh ghi compare đầu và ngay sau lệnh cuối, và
+// compare theo GPIO (env đo S06: mốc "áp duty" [L7-13, V2-8], duty theo tên GPIO). Compare có hiệu
+// lực ở lần bộ đếm về 0 kế tiếp (update_cmp_on_tez), tức trong [t_before; t_after + 50 µs].
+void motor_set_info(motor_id_t id, int speed, motor_set_info_t *info) {
     if (id >= MOTOR_COUNT) return;
 
     if (speed >  PWM_MAX) speed =  PWM_MAX;
@@ -139,9 +147,18 @@ void motor_set(motor_id_t id, int speed) {
         lpwm = PWM_RESOLUTION - (uint32_t)(-speed);
     }
 
+    int64_t t0 = info ? esp_timer_get_time() : 0;
     mcpwm_comparator_set_compare_value(comparators[id][0], rpwm);
     mcpwm_comparator_set_compare_value(comparators[id][1], lpwm);
-}    
+    if (info) {
+        info->t_after  = esp_timer_get_time();
+        info->t_before = t0;
+        info->gpio[0]  = motor_cfg[id].rpwm_gpio;   // GPIO của comparators[id][0]
+        info->gpio[1]  = motor_cfg[id].lpwm_gpio;
+        info->cmp[0]   = rpwm;
+        info->cmp[1]   = lpwm;
+    }
+}
 
 void motor_stop_all(void) {
     for (int i = 0; i < MOTOR_COUNT; i++) {

@@ -91,6 +91,14 @@ static void _update_accum(enc_id_t id) {
     accum_count[id] = (int32_t)count;
 }
 
+void encoder_read_all(int32_t out[ENC_COUNT]) {
+    for (int i = 0; i < ENC_COUNT; i++) {
+        int count = 0;
+        pcnt_unit_get_count(pcnt_units[i], &count);
+        out[i] = (int32_t)count;
+    }
+}
+
 int32_t encoder_get_count(enc_id_t id) {
     if (id >= ENC_COUNT) return 0;
     _update_accum(id);

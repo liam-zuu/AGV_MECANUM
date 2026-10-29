@@ -33,6 +33,14 @@ typedef enum {
 
 void motor_init(void);
 void motor_set(motor_id_t id, int speed); // -1000 đến +1000
+
+// Thông tin một lần ghi compare (env đo S06): thời điểm trước/sau, compare theo GPIO
+typedef struct {
+    int64_t  t_before, t_after;   // esp_timer [µs]
+    int      gpio[2];             // GPIO nối ra H7
+    uint32_t cmp[2];              // compare đã ghi (0..PWM_RESOLUTION) cho gpio[0], gpio[1]
+} motor_set_info_t;
+void motor_set_info(motor_id_t id, int speed, motor_set_info_t *info);   // info có thể NULL
 void motor_stop_all(void);
 void motor_enable(bool en);
 

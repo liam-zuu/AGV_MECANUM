@@ -52,6 +52,21 @@ extern "C" void imu_note_lib_drop(int layer) {
     else if (layer == 2) s_drop_cbq = s_drop_cbq + 1;    // data_proc_task
 }
 
+// Cổng nhận SPI (task dịch vụ SH2 HAL), trước update_data của thư viện (Liam 29/10: "đếm ở cổng SPI")
+extern "C" void imu_note_rx_report(uint8_t rpt_id, uint8_t seq, uint32_t epoch, int queued) {
+    if (rpt_id != IMU_RPT_ACCEL && rpt_id != IMU_RPT_GYRO && rpt_id != IMU_RPT_GAME_RV) return;
+    imu_event_hook_t ev = g_ev_hook;
+    if (!ev) return;
+    imu_event_t e = {};
+    e.kind    = rpt_id;
+    e.stage   = IMU_STAGE_RX;
+    e.applied = queued ? 1 : 0;
+    e.seq     = seq;
+    e.t_us    = esp_timer_get_time();
+    e.epoch   = epoch;
+    ev(&e);
+}
+
 extern "C" void imu_get_drops(imu_drops_t *out) {
     if (!out) return;
     out->rx_queue = s_drop_rx;
