@@ -173,7 +173,7 @@ class BNO08x
         void lock_user_data();
         void unlock_user_data();
 
-        void handle_sensor_report(sh2_SensorValue_t* sensor_val);
+        void handle_sensor_report(sh2_SensorValue_t* sensor_val, uint32_t reset_n);
         void handle_cb(uint8_t rpt_ID, BNO08xCbGeneric* cb_entry);
 
         esp_err_t init_config_args();

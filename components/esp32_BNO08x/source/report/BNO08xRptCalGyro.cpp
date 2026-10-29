@@ -17,6 +17,7 @@ void BNO08xRptCalGyro::update_data(sh2_SensorValue_t* sensor_val)
     lock_user_data();
     data = sensor_val->un.gyroscope;
     data.accuracy = static_cast<BNO08xAccuracy>(sensor_val->status);
+    stamp_meta(sensor_val);   // AGV_MECANUM: same lock as the data
     unlock_user_data();
 
     if (rpt_bit & xEventGroupGetBits(sync_ctx->evt_grp_rpt_en))
@@ -46,6 +47,18 @@ bno08x_gyro_t BNO08xRptCalGyro::get()
 {
     lock_user_data();
     bno08x_gyro_t rqdata = data;
+    unlock_user_data();
+    return rqdata;
+}
+
+/**
+ * @brief AGV_MECANUM (29/10/2026): as get(), plus the identity of the same report (one lock).
+ */
+bno08x_gyro_t BNO08xRptCalGyro::get(bno08x_rpt_meta_t& meta_out)
+{
+    lock_user_data();
+    bno08x_gyro_t rqdata = data;
+    meta_out = meta;
     unlock_user_data();
     return rqdata;
 }

@@ -11,6 +11,10 @@ BNO08x* BNO08xSH2HAL::imu;
 // AGV_MECANUM (28/10/2026, spec controller-IMU v2.2 §3): báo ứng dụng mỗi lần chip SH2_RESET.
 // Bản thật ở src/imu/imu.cpp (tăng reset_n); bản weak này chỉ để thư viện link được một mình.
 extern "C" __attribute__((weak)) void imu_note_chip_reset(void) {}
+// AGV_MECANUM (29/10/2026, spec S06 v3.4 V4-2, Y13): host reset count stamped on each report as it is
+// received, and drops counted per layer (1 = queue_rx_sensor_event full, 2 = queue_cb_report_id full).
+extern "C" __attribute__((weak)) uint32_t imu_hal_reset_count(void) { return 0; }
+extern "C" __attribute__((weak)) void imu_note_lib_drop(int layer) { (void)layer; }
 
 /**
  * @brief Sets the BNO08x driver object to be used with sh2 HAL lib callbacks.
@@ -161,7 +165,13 @@ void BNO08xSH2HAL::hal_cb(void* cookie, sh2_AsyncEvent_t* pEvent)
  */
 void BNO08xSH2HAL::sensor_event_cb(void* cookie, sh2_SensorEvent_t* event)
 {
-    xQueueSend(imu->queue_rx_sensor_event, event, 0);
+    // AGV_MECANUM: reset count read here, not in the app callback, because a report queued before
+    // a reset notice may be handled after reset_n has already been increased (spec S06 v3.4 V4-2).
+    BNO08xPrivateTypes::bno08x_rx_evt_t rx;
+    rx.evt = *event;
+    rx.reset_n = imu_hal_reset_count();
+    if (xQueueSend(imu->queue_rx_sensor_event, &rx, 0) != pdTRUE)
+        imu_note_lib_drop(1);
 }
 
 /**

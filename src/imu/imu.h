@@ -65,6 +65,30 @@ typedef struct {
 // v: accel x,y,z | gyro x,y,z | roll,pitch,yaw (độ); v[3] = 0.
 typedef void (*imu_report_hook_t)(uint8_t rpt_id, int64_t t_us, uint32_t n, const float v[4]);
 
+// Hook mở rộng cho env đo S06 (29/10/2026, spec S06 v3.4 V3-8, V4-1, V4-2, Y13). Gọi cùng chỗ với
+// hook trên (task callback của thư viện) cho mỗi report, và thêm một lần cho mỗi thông báo reset
+// hoàn tất (kind = IMU_EVT_RESET, gọi trong task dịch vụ SH2 HAL lúc nhận). Hook chỉ chép, không chặn.
+#define IMU_EVT_RESET 0xF0
+typedef struct {
+    uint8_t  kind;       // IMU_RPT_ACCEL / IMU_RPT_GYRO / IMU_RPT_GAME_RV, hoặc IMU_EVT_RESET
+    uint8_t  applied;    // 1: đã ghi vào imu_data_t; 0: callback không lấy được mutex, report bị bỏ
+    uint8_t  seq;        // số thứ tự report SH-2 (8 bit, theo từng loại) của dữ liệu trong v
+    int64_t  t_us;       // esp_timer lúc callback chạy (report) / lúc nhận thông báo (reset)
+    uint32_t n;          // report: accel_n / gyro_n / rv_n sau report này (0 nếu không applied);
+                         // reset: số thông báo reset hoàn tất đã nhận từ lúc khởi động
+    uint32_t epoch;      // report: số thông báo reset đã nhận lúc HAL nhận report (sensor_event_cb)
+    uint32_t lib_n;      // report: số report loại này thư viện đã lưu (thấy được ghi đè trước callback)
+    float    v[4];       // như hook trên; game RV: roll, pitch, yaw (độ, get_euler()), v[3] = 0
+} imu_event_t;
+typedef void (*imu_event_hook_t)(const imu_event_t *e);
+
+// Bộ đếm report bị bỏ theo tầng, cộng dồn từ lúc khởi động (Y13). Không gồm report chip không gửi.
+typedef struct {
+    uint32_t rx_queue;   // tầng 1: hàng đợi HAL → data_proc_task đầy (sensor_event_cb)
+    uint32_t cb_queue;   // tầng 2: hàng đợi data_proc_task → task callback đầy
+    uint32_t cb_mutex;   // tầng 3: callback không lấy được mutex của imu_data_t trong 5 ms
+} imu_drops_t;
+
 // ─── API (C-compatible, implement bên trong .cpp) ─────────────────────────────
 #ifdef __cplusplus
 extern "C" {
@@ -78,9 +102,14 @@ uint32_t    imu_init_ms(void);             // thời gian imu_init() đã dùng 
 const char *imu_init_err_str(int code);
 bool imu_get(imu_data_t *out);   // thread-safe copy data ra ngoài
 void imu_set_report_hook(imu_report_hook_t hook);
+void imu_set_event_hook(imu_event_hook_t hook);
+void imu_get_drops(imu_drops_t *out);
 
 // Gọi từ thư viện (BNO08xSH2HAL::hal_cb) khi chip báo SH2_RESET: tăng reset_n (§3, §4.1).
 void imu_note_chip_reset(void);
+// Gọi từ thư viện: số thông báo reset đã nhận (đóng dấu report lúc nhận) và report bị bỏ ở tầng 1, 2.
+uint32_t imu_hal_reset_count(void);
+void imu_note_lib_drop(int layer);
 
 #ifdef __cplusplus
 }

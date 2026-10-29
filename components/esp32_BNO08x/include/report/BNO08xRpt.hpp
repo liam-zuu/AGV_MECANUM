@@ -41,6 +41,19 @@ class BNO08xRpt
         uint32_t period_us;  ///< The period/interval of the report in microseconds.
         BNO08xPrivateTypes::bno08x_sync_ctx_t* sync_ctx;
 
+        // AGV_MECANUM (29/10/2026, spec S06 v3.4 V3-8, V4-2): identity of the stored data.
+        // rx_epoch is written by data_proc_task just before update_data(); meta only under the
+        // user data lock (stamp_meta() inside update_data(), copied out by get(meta)).
+        uint32_t rx_epoch = 0;
+        bno08x_rpt_meta_t meta = {};
+        void stamp_meta(const sh2_SensorValue_t* sensor_val)
+        {
+            meta.sequence = sensor_val->sequence;
+            meta.epoch = rx_epoch;
+            meta.chip_ts_us = sensor_val->timestamp;
+            meta.n_updates++;
+        }
+
         bool rpt_enable(uint32_t time_between_reports, sh2_SensorConfig_t sensor_cfg = BNO08xPrivateTypes::default_sensor_cfg);
         virtual void update_data(sh2_SensorValue_t* sensor_val) = 0;
 

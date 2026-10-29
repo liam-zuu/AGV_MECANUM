@@ -62,6 +62,34 @@ bno08x_euler_angle_t BNO08xRptRVGeneric::get_euler(bool in_degrees)
 }
 
 /**
+ * @brief AGV_MECANUM (29/10/2026): as get_quat(), plus the identity of the same report (one lock).
+ */
+bno08x_quat_t BNO08xRptRVGeneric::get_quat(bno08x_rpt_meta_t& meta_out)
+{
+    lock_user_data();
+    bno08x_quat_t rqdata = data;
+    meta_out = meta;
+    unlock_user_data();
+    return rqdata;
+}
+
+/**
+ * @brief AGV_MECANUM (29/10/2026): as get_euler(), same conversion, plus the report identity.
+ */
+bno08x_euler_angle_t BNO08xRptRVGeneric::get_euler(bno08x_rpt_meta_t& meta_out, bool in_degrees)
+{
+    bno08x_euler_angle_t rqdata;
+    bno08x_quat_t quat = get_quat(meta_out);
+
+    rqdata = quat; // conversion handled by overloaded operator
+
+    if (in_degrees)
+        rqdata *= RAD_2_DEG;
+
+    return rqdata;
+}
+
+/**
  * @brief Tares vector basis according to axis flags.
  *
  * @param x If true tare x axis.

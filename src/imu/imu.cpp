@@ -23,6 +23,13 @@ static BNO08x          *g_imu       = nullptr;
 static SemaphoreHandle_t g_mutex    = nullptr;
 static imu_data_t        g_data     = {};
 static volatile imu_report_hook_t g_hook = nullptr;
+static volatile imu_event_hook_t  g_ev_hook = nullptr;   // env đo S06 (spec S06 v3.4)
+// Số thông báo reset hoàn tất đã nhận: chỉ task dịch vụ SH2 HAL ghi (imu_note_chip_reset) và đọc
+// (sensor_event_cb đóng dấu report lúc nhận), nên không cần khóa. Khác g_data.reset_n (có thể trễ
+// một nhịp khi mutex bận, fold_pending_reset).
+static volatile uint32_t s_hal_reset_n = 0;
+// Report bị bỏ theo tầng (Y13); mỗi bộ đếm chỉ một task ghi
+static volatile uint32_t s_drop_rx = 0, s_drop_cbq = 0, s_drop_mutex = 0;
 
 // Khởi tạo có hạn: task thư viện báo 0 = đang chạy, 1 = xong, −1 = initialize() lỗi
 static volatile int      g_lib_state   = 0;
@@ -37,6 +44,20 @@ static int64_t           g_reset_pending_t_us = 0;
 static uint32_t          g_init_gyro_ok = 0, g_init_rv_ok = 0;
 
 extern "C" void imu_set_report_hook(imu_report_hook_t hook) { g_hook = hook; }
+extern "C" void imu_set_event_hook(imu_event_hook_t hook)   { g_ev_hook = hook; }
+extern "C" uint32_t imu_hal_reset_count(void)               { return s_hal_reset_n; }
+
+extern "C" void imu_note_lib_drop(int layer) {
+    if (layer == 1) s_drop_rx = s_drop_rx + 1;          // task dịch vụ SH2 HAL
+    else if (layer == 2) s_drop_cbq = s_drop_cbq + 1;    // data_proc_task
+}
+
+extern "C" void imu_get_drops(imu_drops_t *out) {
+    if (!out) return;
+    out->rx_queue = s_drop_rx;
+    out->cb_queue = s_drop_cbq;
+    out->cb_mutex = s_drop_mutex;
+}
 
 static void fold_pending_reset(void) {   // gọi khi đang giữ g_mutex
     taskENTER_CRITICAL(&g_pending_mux);
@@ -54,6 +75,8 @@ static void fold_pending_reset(void) {   // gọi khi đang giữ g_mutex
 // Thư viện gọi trong task dịch vụ SH2 HAL khi chip báo SH2_RESET (kể cả lần reset lúc khởi động)
 extern "C" void imu_note_chip_reset(void) {
     int64_t t_us = esp_timer_get_time();
+    uint32_t hal_n = s_hal_reset_n + 1;
+    s_hal_reset_n = hal_n;     // trước mọi việc khác: report nhận sau dòng này mang epoch mới
     if (g_mutex && xSemaphoreTake(g_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
         fold_pending_reset();
         g_data.reset_n++;
@@ -65,6 +88,14 @@ extern "C" void imu_note_chip_reset(void) {
         g_reset_pending_t_us = t_us;
         g_reset_pending++;
         taskEXIT_CRITICAL(&g_pending_mux);
+    }
+    imu_event_hook_t ev = g_ev_hook;      // spec S06 v3.4 V4-1: thời điểm nhận từng thông báo
+    if (ev) {
+        imu_event_t e = {};
+        e.kind = IMU_EVT_RESET;
+        e.t_us = t_us;
+        e.n    = hal_n;
+        ev(&e);
     }
 }
 
@@ -96,50 +127,75 @@ static void imu_lib_init_task(void *pv) {
 
     // Callback chạy trong task callback của thư viện, mỗi lần đúng một report (rpt_id).
     // Chỉ cập nhật field của report đó và ghi thời điểm nhận phía host.
+    // Dữ liệu và danh tính report (số thứ tự SH-2, epoch) đọc cùng một lần khóa của thư viện
+    // (get(meta), spec S06 v3.4 V3-8): thư viện chỉ giữ report mới nhất mỗi loại, nên nếu hai report
+    // tới trước khi callback chạy thì callback đọc report sau, và seq/lib_n cho thấy điều đó.
     g_imu->register_cb([](uint8_t rpt_id) {
         int64_t t_us = esp_timer_get_time();
         float v[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         uint32_t n = 0;
-
-        if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(5)) != pdTRUE) return;
-        fold_pending_reset();
+        bno08x_rpt_meta_t meta = {};
 
         if (rpt_id == IMU_RPT_ACCEL) {
-            auto a = g_imu->rpt.accelerometer.get();
-            g_data.accel_x = a.x;
-            g_data.accel_y = a.y;
-            g_data.accel_z = a.z;
-            g_data.accel_t_us = t_us;
-            n = ++g_data.accel_n;
+            auto a = g_imu->rpt.accelerometer.get(meta);
             v[0] = a.x; v[1] = a.y; v[2] = a.z;
         } else if (rpt_id == IMU_RPT_GYRO) {
-            auto g = g_imu->rpt.cal_gyro.get();
-            g_data.gyro_x = g.x;
-            g_data.gyro_y = g.y;
-            g_data.gyro_z = g.z;   // wz — dùng cho heading control
-            g_data.gyro_t_us = t_us;
-            n = ++g_data.gyro_n;
+            auto g = g_imu->rpt.cal_gyro.get(meta);
             v[0] = g.x; v[1] = g.y; v[2] = g.z;
-            if (std::isfinite(g.z) && std::fabs(g.z) < IMU_GYRO_SAT_RADPS) g_init_gyro_ok++;
         } else if (rpt_id == IMU_RPT_GAME_RV) {
-            auto e = g_imu->rpt.rv_game.get_euler();
-            g_data.roll  = e.x;
-            g_data.pitch = e.y;
-            g_data.yaw   = e.z;
-            g_data.rv_t_us = t_us;
-            n = ++g_data.rv_n;
+            auto e = g_imu->rpt.rv_game.get_euler(meta);   // độ (mặc định in_degrees = true)
             v[0] = e.x; v[1] = e.y; v[2] = e.z;
-            if (std::isfinite(e.z)) g_init_rv_ok++;
         } else {
-            xSemaphoreGive(g_mutex);
             return;   // report khác (hoặc id 0 lúc task khởi động): bỏ qua
         }
 
-        g_data.valid = true;
-        xSemaphoreGive(g_mutex);
+        bool applied = false;
+        if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            fold_pending_reset();
+            if (rpt_id == IMU_RPT_ACCEL) {
+                g_data.accel_x = v[0];
+                g_data.accel_y = v[1];
+                g_data.accel_z = v[2];
+                g_data.accel_t_us = t_us;
+                n = ++g_data.accel_n;
+            } else if (rpt_id == IMU_RPT_GYRO) {
+                g_data.gyro_x = v[0];
+                g_data.gyro_y = v[1];
+                g_data.gyro_z = v[2];   // wz — dùng cho heading control
+                g_data.gyro_t_us = t_us;
+                n = ++g_data.gyro_n;
+                if (std::isfinite(v[2]) && std::fabs(v[2]) < IMU_GYRO_SAT_RADPS) g_init_gyro_ok++;
+            } else {
+                g_data.roll  = v[0];
+                g_data.pitch = v[1];
+                g_data.yaw   = v[2];
+                g_data.rv_t_us = t_us;
+                n = ++g_data.rv_n;
+                if (std::isfinite(v[2])) g_init_rv_ok++;
+            }
+            g_data.valid = true;
+            xSemaphoreGive(g_mutex);
+            applied = true;
+        } else {
+            s_drop_mutex = s_drop_mutex + 1;   // trước 29/10 bỏ im lặng (spec S06 v3.4 Y13)
+        }
 
         imu_report_hook_t hook = g_hook;
-        if (hook) hook(rpt_id, t_us, n, v);
+        if (hook && applied) hook(rpt_id, t_us, n, v);
+
+        imu_event_hook_t ev = g_ev_hook;
+        if (ev) {
+            imu_event_t e = {};
+            e.kind    = rpt_id;
+            e.applied = applied;
+            e.seq     = meta.sequence;
+            e.t_us    = t_us;
+            e.n       = n;
+            e.epoch   = meta.epoch;
+            e.lib_n   = meta.n_updates;
+            e.v[0] = v[0]; e.v[1] = v[1]; e.v[2] = v[2];
+            ev(&e);
+        }
     });
 
     g_lib_state = 1;
