@@ -31,8 +31,11 @@ static const char *TAG = "S06";
 //   I,qseq,t_us,kind,applied,sseq,epoch,n,lib_n,v0,v1,v2    report IMU tại callback ứng dụng (kind 1 accel,
 //                                                           2 gyro, 8 game RV; giá trị float đủ chữ số)
 //   R,qseq,t_us,reset_count                                 thông báo reset hoàn tất ESP32 nhận [V4-1]
-//   P,qseq,t_before,t_after,wheel,speed,gpioA,cmpA,gpioB,cmpB   một lần ghi compare [L7-13]
-//   E,eseq,t_before,t_after,fl,fr,rl,rr                     đọc count 4 bánh, mỗi 1 ms trong lượt [Y1, Z6]
+//   P,qseq,t_before,t_after,wheel,speed,gpioA,cmpA,gpioB,cmpB,run   một lần ghi compare [L7-13]
+//   E,eseq,t_before,t_after,fl,fr,rl,rr,run                 đọc count 4 bánh, mỗi 1 ms trong lượt [Y1, Z6]
+//     run: số thứ tự lượt (1, 2, … từ khi bật; 0 = chưa có lượt nào), cũng có ở #run_start/#run_end/
+//     #run_stats (run=): Pi gắn dòng E, P và số đếm với đúng lượt (manifest lượt, Codex Sol vòng 3 S58).
+//     Dòng J, I, R, S không mang run: chúng chạy liên tục, chọn theo khoảng thời gian của lượt.
 //   S,qseq,t_us,run,ev_qdrop,enc_ovf,imu_rx,imu_cbq,imu_mutex,gyro_gap_max_us,relay_ok,relay_bad,
 //     log_qdrop,log_send_err,ev_send_err,temp_c             thống kê mỗi 1 s; temp_c: cảm biến nhiệt trong
 //                                                           chip ESP32-S3, °C, "nan" khi không đọc được
@@ -68,7 +71,7 @@ typedef struct {
     uint8_t kind;
     union {
         imu_event_t imu;
-        struct { motor_set_info_t m; uint8_t wheel; int16_t speed; } pwm;
+        struct { motor_set_info_t m; uint8_t wheel; int16_t speed; uint16_t run; } pwm;
         char text[256];
     } u;
 } s06_ev_t;
@@ -80,7 +83,7 @@ static volatile uint32_t s_ev_qdrop;
 static volatile uint32_t s_ev_send_err;
 
 // ─── Vòng đệm đọc encoder (một nơi ghi: callback esp_timer; một nơi đọc: tx_task) ─
-typedef struct { int64_t t_b; int32_t dur; int32_t c[4]; } enc_rd_t;
+typedef struct { int64_t t_b; int32_t dur; int32_t c[4]; uint16_t run; } enc_rd_t;
 static enc_rd_t          s_ring[S06_ENC_RING];
 static volatile uint32_t s_ring_head, s_ring_tail;
 static volatile uint32_t s_enc_ovf;
@@ -91,6 +94,7 @@ static uint32_t s_enc_reads;
 // ─── Trạng thái lượt ─────────────────────────────────────────────────────────
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool s_run_active;
+static uint16_t s_run_id;              // số thứ tự lượt, tăng ở start_run (trong s_mux); 0 = chưa có lượt
 static int64_t  s_t_start, s_dur_us;
 static int      s_profile;
 static bool     s_auto_end;
@@ -144,10 +148,12 @@ static void enc_timer_cb(void *arg) {
     // S41: kiểm lượt và đếm cùng một vùng khóa với end_run, để mọi lần đọc đã đếm đều thuộc lượt
     taskENTER_CRITICAL(&s_mux);
     bool active = s_run_active;
+    uint16_t run = s_run_id;
     if (active) s_enc_reads++;
     taskEXIT_CRITICAL(&s_mux);
     if (!active) return;
     enc_rd_t r;
+    r.run = run;                       // manifest lượt (S58): dòng E mang lượt đã đếm lần đọc này
     int32_t c[ENC_COUNT];
     r.t_b = esp_timer_get_time();
     encoder_read_all(c);
@@ -200,9 +206,10 @@ static void format_ev(const s06_ev_t *e) {
                          (double)i->v[0], (double)i->v[1], (double)i->v[2]);
     } else if (e->kind == EV_PWM) {
         const motor_set_info_t *m = &e->u.pwm.m;
-        n = snprintf(l, sizeof l, "P,%lu,%lld,%lld,%u,%d,%d,%lu,%d,%lu\n", (unsigned long)q,
+        n = snprintf(l, sizeof l, "P,%lu,%lld,%lld,%u,%d,%d,%lu,%d,%lu,%u\n", (unsigned long)q,
                      (long long)m->t_before, (long long)m->t_after, e->u.pwm.wheel, e->u.pwm.speed,
-                     m->gpio[0], (unsigned long)m->cmp[0], m->gpio[1], (unsigned long)m->cmp[1]);
+                     m->gpio[0], (unsigned long)m->cmp[0], m->gpio[1], (unsigned long)m->cmp[1],
+                     (unsigned)e->u.pwm.run);
     } else {
         n = snprintf(l, sizeof l, "#%s,qseq=%lu\n", e->u.text, (unsigned long)q);
     }
@@ -254,9 +261,9 @@ static void tx_task(void *pv) {
         while (s_ring_tail != s_ring_head) {
             const enc_rd_t *r = &s_ring[s_ring_tail];
             char l[120];
-            int n = snprintf(l, sizeof l, "E,%lu,%lld,%lld,%ld,%ld,%ld,%ld\n", (unsigned long)++s_eseq,
+            int n = snprintf(l, sizeof l, "E,%lu,%lld,%lld,%ld,%ld,%ld,%ld,%u\n", (unsigned long)++s_eseq,
                              (long long)r->t_b, (long long)(r->t_b + r->dur),
-                             (long)r->c[0], (long)r->c[1], (long)r->c[2], (long)r->c[3]);
+                             (long)r->c[0], (long)r->c[1], (long)r->c[2], (long)r->c[3], (unsigned)r->run);
             s_ring_tail = (s_ring_tail + 1) % S06_ENC_RING;
             append(l, n);
         }
@@ -361,13 +368,14 @@ static void start_run(int64_t t_now, int prof, int64_t dur_us, bool auto_end) {
     s_force_apply = true;
     taskENTER_CRITICAL(&s_mux);
     s_enc_reads  = 0;
+    s_run_id++;
     s_run_active = true;
     taskEXIT_CRITICAL(&s_mux);
     // imu_init = mã imu_init() (0 = IMU_INIT_OK), imu_init_ms = thời gian khởi tạo: spec S06 T4 (1), Liam
     // duyệt 29/10 ở phiên THESIS ("Theo khuyến nghị"), vì dòng "BNO085 init OK" chỉ ra cổng serial
-    push_text("run_start,first_data_seq=%lu,timestamp_us=%lld,profile=%s,duration_s=%lld,auto_end=%d,"
+    push_text("run_start,run=%u,first_data_seq=%lu,timestamp_us=%lld,profile=%s,duration_s=%lld,auto_end=%d,"
               "fw=%s,dirty=%d,env=%s,cfg_hash=%08lx,imu_init=%d,imu_init_ms=%lu",
-              (unsigned long)(logger_seq() + 1), (long long)t_now, PROF_NAME[prof],
+              (unsigned)s_run_id, (unsigned long)(logger_seq() + 1), (long long)t_now, PROF_NAME[prof],
               (long long)(dur_us / 1000000LL), auto_end, FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV,
               (unsigned long)fnv1a(all), imu_init_status(), (unsigned long)imu_init_ms());
     push_text("cfg,%s", cfg);
@@ -380,10 +388,10 @@ static void end_run(int64_t t_now, const char *reason) {
     taskEXIT_CRITICAL(&s_mux);
     imu_drops_t d;
     imu_get_drops(&d);
-    push_text("run_end,last_data_seq=%lu,log_qdrop=%lu,log_send_err=%lu,timestamp_us=%lld,reason=%s,"
+    push_text("run_end,run=%u,last_data_seq=%lu,log_qdrop=%lu,log_send_err=%lu,timestamp_us=%lld,reason=%s,"
               "elapsed_us=%lld,log_qdrop_run=%lu,ev_qdrop_run=%lu,enc_ovf_run=%lu,imu_drop_run=%lu/%lu/%lu,"
               "gyro_gap_max_us=%lld",
-              (unsigned long)logger_seq(), (unsigned long)logger_qdrop(),
+              (unsigned)s_run_id, (unsigned long)logger_seq(), (unsigned long)logger_qdrop(),
               (unsigned long)logger_send_err(), (long long)t_now, reason,
               (long long)(t_now - s_t_start), (unsigned long)(logger_qdrop() - s_run0_log_qdrop),
               (unsigned long)(s_ev_qdrop - s_run0_ev_qdrop), (unsigned long)(s_enc_ovf - s_run0_enc_ovf),
@@ -392,7 +400,7 @@ static void end_run(int64_t t_now, const char *reason) {
               (unsigned long)(d.cb_mutex - s_run0_imu.cb_mutex), (long long)s_gyro_gap_max);
     // S37: own short line (#run_end is already close to the 256-character text buffer)
     // S41: enc_reads_run = số lần đọc count của lượt (dòng E Pi phải nhận = enc_reads_run − enc_ovf_run)
-    push_text("run_stats,log_send_err_run=%lu,enc_reads_run=%lu",
+    push_text("run_stats,run=%u,log_send_err_run=%lu,enc_reads_run=%lu", (unsigned)s_run_id,
               (unsigned long)(logger_send_err() - s_run0_log_send_err), (unsigned long)enc_reads);
 }
 
@@ -462,6 +470,7 @@ void s06_apply(const int speed[4], bool force) {
         motor_set_info((motor_id_t)i, speed[i], &e.u.pwm.m);
         e.u.pwm.wheel = (uint8_t)i;
         e.u.pwm.speed = (int16_t)speed[i];
+        e.u.pwm.run   = s_run_id;          // lượt mới nhất (sau #run_end: lần ép về 0 của lượt đó)
         s_last_speed[i] = speed[i];
         push(&e);
     }
