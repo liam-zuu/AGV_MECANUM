@@ -28,7 +28,9 @@
 
 #define CTRL_PID   0
 #define CTRL_ADRC  1
+#ifndef CTRL_MODE             // env hil_bench_ladrc đặt qua build flag
 #define CTRL_MODE  CTRL_PID   // ← đổi ở đây (chế độ lúc khởi động)
+#endif
 
 typedef struct {
     agv_velocity_t    sp;             // setpoint thân (sau interlock)
