@@ -38,7 +38,8 @@ static const char *TAG = "S06";
 //                                                           chip ESP32-S3, °C, "nan" khi không đọc được
 //                                                           (T5, Liam 30/10; không phải nhiệt độ môi trường)
 //   #fw,..  #run_start,..  #run_end,..  #ack,..             dòng văn bản, cuối dòng có qseq=
-//                                                           (#run_start có imu_init, imu_init_ms: T4 (1))
+//                                                           (#run_start có imu_init, imu_init_ms: T4 (1);
+//                                                           ngay sau #run_end: #run_stats,log_send_err_run)
 // qseq: tăng liên tục cho mọi dòng trừ E; eseq: riêng dòng E. Pi thấy chỗ hở = mất trên đường UDP.
 // Mất trước khi gửi (hàng đợi đầy, vòng đệm encoder đầy) đếm ở ev_qdrop, enc_ovf; #run_end báo số
 // tăng trong lượt (*_run); > 0 thì lượt không đủ điều kiện đo (spec S06 §4.3). Sự kiện IMU chỉ đẩy khi
@@ -102,6 +103,9 @@ static volatile bool    s_gap_reset;
 static volatile int64_t s_gyro_last_t, s_gyro_gap_max;
 // Bộ đếm lúc bắt đầu lượt, để #run_end báo số tăng trong lượt
 static uint32_t s_run0_ev_qdrop, s_run0_enc_ovf, s_run0_log_qdrop;
+// log_send_err tại START: #run_end báo log_send_err_run (Codex Sol vòng 1/2 S37: mốc lấy từ DATA đầu
+// tiên PC nhận được có thể muộn hơn START, làm thiếu lỗi gửi đầu lượt)
+static uint32_t s_run0_log_send_err;
 static imu_drops_t s_run0_imu;
 
 // ─── Đẩy sự kiện ─────────────────────────────────────────────────────────────
@@ -338,6 +342,7 @@ static void start_run(int64_t t_now, int prof, int64_t dur_us, bool auto_end) {
     s_run0_ev_qdrop  = s_ev_qdrop;
     s_run0_enc_ovf   = s_enc_ovf;
     s_run0_log_qdrop = logger_qdrop();
+    s_run0_log_send_err = logger_send_err();
     imu_get_drops(&s_run0_imu);
     s_gap_reset  = true;
     s_profile    = prof;
@@ -370,6 +375,8 @@ static void end_run(int64_t t_now, const char *reason) {
               (unsigned long)(d.rx_queue - s_run0_imu.rx_queue),
               (unsigned long)(d.cb_queue - s_run0_imu.cb_queue),
               (unsigned long)(d.cb_mutex - s_run0_imu.cb_mutex), (long long)s_gyro_gap_max);
+    // S37: own short line (#run_end is already close to the 256-character text buffer)
+    push_text("run_stats,log_send_err_run=%lu", (unsigned long)(logger_send_err() - s_run0_log_send_err));
 }
 
 // ─── Lịch PWM ────────────────────────────────────────────────────────────────
