@@ -39,7 +39,8 @@ static const char *TAG = "S06";
 //                                                           (T5, Liam 30/10; không phải nhiệt độ môi trường)
 //   #fw,..  #run_start,..  #run_end,..  #ack,..             dòng văn bản, cuối dòng có qseq=
 //                                                           (#run_start có imu_init, imu_init_ms: T4 (1);
-//                                                           ngay sau #run_end: #run_stats,log_send_err_run)
+//                                                           ngay sau #run_end: #run_stats,log_send_err_run,
+//                                                           enc_reads_run)
 // qseq: tăng liên tục cho mọi dòng trừ E; eseq: riêng dòng E. Pi thấy chỗ hở = mất trên đường UDP.
 // Mất trước khi gửi (hàng đợi đầy, vòng đệm encoder đầy) đếm ở ev_qdrop, enc_ovf; #run_end báo số
 // tăng trong lượt (*_run); > 0 thì lượt không đủ điều kiện đo (spec S06 §4.3). Sự kiện IMU chỉ đẩy khi
@@ -83,6 +84,9 @@ typedef struct { int64_t t_b; int32_t dur; int32_t c[4]; } enc_rd_t;
 static enc_rd_t          s_ring[S06_ENC_RING];
 static volatile uint32_t s_ring_head, s_ring_tail;
 static volatile uint32_t s_enc_ovf;
+// Số lần đọc count trong lượt, đếm ở nơi đọc (kể cả lần vòng đệm đầy): #run_stats báo enc_reads_run để
+// Pi so số dòng E nhận được với số producer đã đọc, thấy cả mất đầu/đuôi (Codex Sol vòng 2/2 S41)
+static uint32_t s_enc_reads;
 
 // ─── Trạng thái lượt ─────────────────────────────────────────────────────────
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -137,7 +141,12 @@ static void imu_hook(const imu_event_t *ie) {
 }
 
 static void enc_timer_cb(void *arg) {
-    if (!s_run_active) return;
+    // S41: kiểm lượt và đếm cùng một vùng khóa với end_run, để mọi lần đọc đã đếm đều thuộc lượt
+    taskENTER_CRITICAL(&s_mux);
+    bool active = s_run_active;
+    if (active) s_enc_reads++;
+    taskEXIT_CRITICAL(&s_mux);
+    if (!active) return;
     enc_rd_t r;
     int32_t c[ENC_COUNT];
     r.t_b = esp_timer_get_time();
@@ -350,7 +359,10 @@ static void start_run(int64_t t_now, int prof, int64_t dur_us, bool auto_end) {
     s_auto_end   = auto_end;
     s_t_start    = t_now;
     s_force_apply = true;
+    taskENTER_CRITICAL(&s_mux);
+    s_enc_reads  = 0;
     s_run_active = true;
+    taskEXIT_CRITICAL(&s_mux);
     // imu_init = mã imu_init() (0 = IMU_INIT_OK), imu_init_ms = thời gian khởi tạo: spec S06 T4 (1), Liam
     // duyệt 29/10 ở phiên THESIS ("Theo khuyến nghị"), vì dòng "BNO085 init OK" chỉ ra cổng serial
     push_text("run_start,first_data_seq=%lu,timestamp_us=%lld,profile=%s,duration_s=%lld,auto_end=%d,"
@@ -362,7 +374,10 @@ static void start_run(int64_t t_now, int prof, int64_t dur_us, bool auto_end) {
 }
 
 static void end_run(int64_t t_now, const char *reason) {
+    taskENTER_CRITICAL(&s_mux);
     s_run_active = false;
+    uint32_t enc_reads = s_enc_reads;
+    taskEXIT_CRITICAL(&s_mux);
     imu_drops_t d;
     imu_get_drops(&d);
     push_text("run_end,last_data_seq=%lu,log_qdrop=%lu,log_send_err=%lu,timestamp_us=%lld,reason=%s,"
@@ -376,7 +391,9 @@ static void end_run(int64_t t_now, const char *reason) {
               (unsigned long)(d.cb_queue - s_run0_imu.cb_queue),
               (unsigned long)(d.cb_mutex - s_run0_imu.cb_mutex), (long long)s_gyro_gap_max);
     // S37: own short line (#run_end is already close to the 256-character text buffer)
-    push_text("run_stats,log_send_err_run=%lu", (unsigned long)(logger_send_err() - s_run0_log_send_err));
+    // S41: enc_reads_run = số lần đọc count của lượt (dòng E Pi phải nhận = enc_reads_run − enc_ovf_run)
+    push_text("run_stats,log_send_err_run=%lu,enc_reads_run=%lu",
+              (unsigned long)(logger_send_err() - s_run0_log_send_err), (unsigned long)enc_reads);
 }
 
 // ─── Lịch PWM ────────────────────────────────────────────────────────────────
