@@ -28,7 +28,7 @@
 
 #define CTRL_PID   0
 #define CTRL_ADRC  1
-#ifndef CTRL_MODE             // env hil_bench_ladrc đặt qua build flag
+#ifndef CTRL_MODE             // env ladrc đặt qua build flag
 #define CTRL_MODE  CTRL_PID   // ← đổi ở đây (chế độ lúc khởi động)
 #endif
 
@@ -39,7 +39,7 @@ typedef struct {
     const imu_data_t *imu;            // bản sao imu_get() mới nhất; NULL = chưa có
     int64_t           now_us;
     float             dt;             // chu kỳ thực [s]
-    bool              motor_on;       // driver enable (SWA, hoặc hil_bench)
+    bool              motor_on;       // driver enable (SWA)
     bool              run_active;     // motor_on và đang chạy theo quỹ đạo VALID (MODE_AUTO)
     bool              wheels_lifted;  // bài chạy kê bánh: tắt ước lượng bias
 } vel_ctrl_in_t;

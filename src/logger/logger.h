@@ -66,6 +66,8 @@ typedef struct {
     float    src_switch_dwz;
     uint32_t bias_updates;
     uint8_t  slip_eval;        // 1: tick này xét được r; 0: không (cờ 0 không có nghĩa "không trượt")
+    // Chỉ dòng tổng kết (QĐ 6 bậc 1): gói UDP bị bỏ / được nhận trong lượt
+    uint32_t udp_drop, udp_take;
 } log_data_t;
 
 #define LOG_KIND_DATA    0
