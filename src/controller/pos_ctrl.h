@@ -24,9 +24,14 @@ typedef struct {
     float kp;            // [1/s]    6  (M6 params_mecanum.m, chỉnh cho plant mô-men cũ; chưa tune)
     float ki;            // [1/s²]   3  (như trên)
     float v_corr_max;    // [m/s]    [ĐỀ XUẤT 0,5] chặn phần hiệu chỉnh mỗi trục
+    // (a) cửa sổ "đã tới vị trí" khi lệnh = 0 (04/11): lớn hơn dải sai số lúc săn trên fwsim
+    // (2–4 mm, O1_FEAS run05_diag), rất nhỏ so với D = 0,10 m của O1. e_win ≤ 0: tắt.
+    float e_win;         // [m]      [ĐỀ XUẤT 0,005; 0 = tắt mặc định]
+    float e_exit;        // [m]      [ĐỀ XUẤT 0,010]
 } pos_params_t;
 
-#define POS_PARAMS_DEFAULT { .on = false, .kp = 6.0f, .ki = 3.0f, .v_corr_max = 0.5f }
+#define POS_PARAMS_DEFAULT { .on = false, .kp = 6.0f, .ki = 3.0f, .v_corr_max = 0.5f, \
+                             .e_win = 0.0f, .e_exit = 0.010f }
 
 typedef struct {
     float vx_ref, vy_ref, wz_ref;   // vận tốc lệnh hệ thân (sau interlock)
@@ -35,6 +40,7 @@ typedef struct {
     bool  head_on;                  // heading.c on: ψ_imu dùng được
     float dt;                       // [s]
     bool  run_active;
+    bool  hold;                     // (d) logic dừng của vel_ctrl.c đang giữ: không hiệu chỉnh, tích phân giữ
 } pos_in_t;
 
 typedef struct {
@@ -44,6 +50,7 @@ typedef struct {
     float    x, y, th;              // tư thế ước lượng
     float    ex_b, ey_b;            // sai số hệ thân [m]
     uint8_t  th_src;                // 0 encoder, 1 IMU
+    bool     in_pos;                // (a) trong cửa sổ "đã tới vị trí"
 } pos_out_t;
 
 void          pos_init(const pos_params_t *p);   // NULL = mặc định

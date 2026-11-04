@@ -52,6 +52,7 @@ typedef struct {
     imu_fusion_out_t imu;      // hợp lệ, nguồn wz, cờ trượt, bias (cột log §8)
     heading_out_t    head;     // vòng giữ hướng (cột log §8)
     pos_out_t        pos;      // vòng vị trí x, y (pos_ctrl.c; mặc định TẮT, corr = 0)
+    bool             still;    // (d) logic dừng đang giữ (PWM 0, bộ điều khiển reset)
 
     // Bộ đếm cộng dồn cho metric (spec S02): log mất mẫu vẫn tính đúng,
     // khoảng trống trong tick cho biết số mẫu mất. Reset ở init / set_mode.
@@ -60,7 +61,18 @@ typedef struct {
     uint32_t       sat_ticks[4];  // số tick có |pwm| ≥ PWM_MAX
 } vel_ctrl_out_t;
 
+// (d) Logic dừng (Liam 04/11 "đồng ý làm a+d"; mặc định TẮT, bật khi gộp do Liam quyết):
+// v_still lớn hơn đỉnh tốc độ lúc săn trên fwsim (≤ 0,045 m/s, O1_FEAS run02–run05_diag);
+// t_still để không giữ giữa lúc đổi chiều. Ngưỡng [ĐỀ XUẤT], chưa kiểm trên xe.
+typedef struct {
+    bool    on;
+    float   v_still;      // [m/s] [ĐỀ XUẤT 0,05]; wz dùng v_still/(LX+LY)
+    int64_t t_still_us;   // [µs]  [ĐỀ XUẤT 500 000]
+} still_params_t;
+#define STILL_PARAMS_DEFAULT { .on = false, .v_still = 0.05f, .t_still_us = 500000 }
+
 void               vel_ctrl_init(void);              // khởi tạo PID, ADRC, imu_fusion, heading; chế độ = CTRL_MODE
+still_params_t    *vel_ctrl_still_params(void);
 void               vel_ctrl_set_mode(int mode);      // CTRL_PID / CTRL_ADRC; reset trạng thái bộ điều khiển, đặt lại vòng hướng
 int                vel_ctrl_mode(void);
 pid_controller_t  *vel_ctrl_pid(void);

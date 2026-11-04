@@ -13,6 +13,7 @@ static struct {
     float x_ref, y_ref, th_ref;
     float x, y, th;
     float ix, iy;        // tích phân sai số hệ thân [m·s]
+    bool  in_pos;        // (a) trong cửa sổ "đã tới vị trí"
 } S;
 
 static float wrap_pi(float a) {
@@ -76,7 +77,18 @@ void pos_step(const pos_in_t *in, pos_out_t *out) {
         float ex = S.x_ref - S.x, ey = S.y_ref - S.y;
         out->ex_b =  c * ex + s * ey;
         out->ey_b = -s * ex + c * ey;
-        if (P.on) {
+
+        // (a) Cửa sổ "đã tới vị trí" (Liam 04/11 "đồng ý làm a+d"): chỉ khi lệnh vận tốc = 0.
+        // Vào khi |e| < e_win, ra khi |e| > e_exit hoặc có lệnh khác 0; trong cửa sổ không hiệu
+        // chỉnh, tích phân giữ nguyên. e_win ≤ 0: tắt cửa sổ.
+        bool cmd_zero = in->vx_ref == 0.0f && in->vy_ref == 0.0f && in->wz_ref == 0.0f;
+        float e = sqrtf(ex * ex + ey * ey);
+        if (!cmd_zero || P.e_win <= 0.0f) S.in_pos = false;
+        else if (e < P.e_win)             S.in_pos = true;
+        else if (e > P.e_exit)            S.in_pos = false;
+        out->in_pos = S.in_pos;
+
+        if (P.on && !S.in_pos && !in->hold) {
             out->on = true;
             out->corr_vx = axis(out->ex_b, &S.ix, dt);
             out->corr_vy = axis(out->ey_b, &S.iy, dt);
