@@ -8,6 +8,7 @@ static struct {
     int32_t  hist[WHEEL_SLIP_WIN_MAX + 1][4];   // vòng: số đếm của win+1 tick gần nhất
     uint16_t head;        // chỗ ghi tick kế tiếp
     uint16_t n;           // số tick đã ghi (≤ win+1)
+    uint16_t len;         // win+1 của lịch sử hiện tại; đổi win_ticks giữa chừng thì ghi lại từ đầu
     bool     flag;
     int64_t  above_since; // −1 = chưa
     int64_t  below_since; // −1 = chưa (dưới th/2 hoặc không xét được)
@@ -31,6 +32,11 @@ void wheel_slip_step(const wheel_slip_in_t *in, wheel_slip_out_t *out) {
     if (win < 1) win = 1;
     if (win > WHEEL_SLIP_WIN_MAX) win = WHEEL_SLIP_WIN_MAX;
     const uint16_t len = (uint16_t)(win + 1);
+    if (len != S.len) {                          // đổi kích thước cửa sổ: lịch sử cũ bỏ (Codex P11)
+        S.len  = len;
+        S.head = 0;
+        S.n    = 0;
+    }
 
     for (int i = 0; i < 4; i++) S.hist[S.head][i] = in->count[i];
     uint16_t cur = S.head;
@@ -43,7 +49,8 @@ void wheel_slip_step(const wheel_slip_in_t *in, wheel_slip_out_t *out) {
         uint16_t old = S.head;                   // tick cũ nhất trong vòng = win tick trước
         float d[4], sum_abs = 0.0f, dmax = 0.0f;
         for (int i = 0; i < 4; i++) {
-            d[i] = (float)(S.hist[cur][i] - S.hist[old][i]);
+            // hiệu modulo 2^32 rồi về có dấu: không tràn int32 qua biên (Codex P9, 05/11)
+            d[i] = (float)(int32_t)((uint32_t)S.hist[cur][i] - (uint32_t)S.hist[old][i]);
             float a = fabsf(d[i]);
             sum_abs += a;
             if (a > dmax) dmax = a;

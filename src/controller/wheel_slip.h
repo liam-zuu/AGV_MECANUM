@@ -11,7 +11,11 @@
 //
 // Xe Mecanum 4 bánh, 3 bậc tự do: từ kinematics_inverse(), mọi chuyển động không trượt cho
 //   ω_fl + ω_fr − ω_rl − ω_rr = 0   (trung bình trục trước = trục sau, không phụ thuộc LX, LY)
-// nên phần dư khác 0 khi các bánh trượt KHÔNG ĐỀU. Trượt đều cả 4 bánh không thấy được.
+// nên phần dư khác 0 khi các bánh trượt KHÔNG ĐỀU. Đây là phép kiểm MỘT phần dư vô hướng, không
+// phát hiện mọi trượt không đều (Codex P10, 05/11): mọi kiểu dư nằm trong không gian chuyển động
+// hợp lệ thì không thấy, ví dụ trượt đều cả 4 bánh, hay FL và RR cùng quay dư một lượng
+// (d = [300, 200, 200, 300] cho res = 0). Bánh đảo chiều trong cửa sổ có thể cho d_i ≈ 0 nên
+// eval = 0 (không xét).
 // Cờ trượt của imu_fusion.c (wz encoder − gyro) chỉ thấy trượt làm xe quay khác encoder.
 //
 // Tính trên số đếm cộng dồn encoder_get_count() trong cửa sổ win_ticks tick:
