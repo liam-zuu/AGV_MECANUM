@@ -104,14 +104,18 @@ void logger_task(void *pv) {
         "wz_meas,wz_cmd,gz_fused,yaw_rad,age_g_ms,age_r_ms,gyro_n,rv_n,reset_n,"
         "g_valid,r_valid,wz_src,src_switch_count,psi_ref,e_psi,head_on,psi_reset_count,"
         "slip_flag,slip_on_count,r,bias_gz,"
-        "src_switch_dwz,bias_updates,slip_eval\n";
+        "src_switch_dwz,bias_updates,slip_eval,"
+        "pos_on,pos_x,pos_y,pos_th,pos_x_ref,pos_y_ref,pos_th_ref,pos_corr_vx,pos_corr_vy,"
+        "pos_th_src,pos_in_pos,still\n";
     sendto(sock, header, strlen(header), 0,
            (struct sockaddr *)&dest_addr, sizeof(dest_addr));
 
     ESP_LOGI(TAG, "Logger streaming → %s:%d", LOGGER_PC_IP, LOGGER_UDP_PORT);
 
     log_data_t data;
-    char buf[768];
+    // 04/11: 768 → 1024 vì thêm cột pos_*, ws_* (dòng dài nhất ước tính khoảng 900 byte với mọi số
+    // ở biên); static để không tăng stack 4096 của task (chỉ một logger_task).
+    static char buf[1024];
 
     while (1) {
         // Block cho đến khi có data — không busy-wait
@@ -143,7 +147,9 @@ void logger_task(void *pv) {
             "%.4f,%.4f,%.4f,%.4f,%.1f,%.1f,%lu,%lu,%lu,"
             "%u,%u,%u,%lu,%.4f,%.4f,%u,%lu,"
             "%u,%lu,%.4f,%.5f,"
-            "%.4f,%lu,%u\n",
+            "%.4f,%lu,%u,"
+            "%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,"
+            "%u,%u,%u\n",
             data.timestamp_us,
             data.fl_count, data.fr_count, data.rl_count, data.rr_count,
             data.fl_rpm,   data.fr_rpm,   data.rl_rpm,   data.rr_rpm,
@@ -166,7 +172,10 @@ void logger_task(void *pv) {
             (unsigned long)data.src_switch_count, data.psi_ref, data.e_psi,
             (unsigned)data.head_on, (unsigned long)data.psi_reset_count,
             (unsigned)data.slip_flag, (unsigned long)data.slip_on_count, data.r, data.bias_gz,
-            data.src_switch_dwz, (unsigned long)data.bias_updates, (unsigned)data.slip_eval
+            data.src_switch_dwz, (unsigned long)data.bias_updates, (unsigned)data.slip_eval,
+            (unsigned)data.pos_on, data.pos_x, data.pos_y, data.pos_th,
+            data.pos_x_ref, data.pos_y_ref, data.pos_th_ref, data.pos_corr_vx, data.pos_corr_vy,
+            (unsigned)data.pos_th_src, (unsigned)data.pos_in_pos, (unsigned)data.still
         );
 
         if (len > 0 && len < (int)sizeof(buf)) {

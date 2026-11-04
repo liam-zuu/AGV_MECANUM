@@ -64,6 +64,16 @@ typedef struct {
     float    src_switch_dwz;
     uint32_t bias_updates;
     uint8_t  slip_eval;        // 1: tick này xét được r; 0: không (cờ 0 không có nghĩa "không trượt")
+    // Thêm 04/11 (vòng vị trí pos_ctrl.c, O1 v6 mục 5.8; Liam "Làm cột log"): cuối dòng để cột cũ
+    // giữ chỗ. Thứ tự cột chốt: 66 cột ctrl-imu, 12 cột pos_* này, rồi 5 cột ws_* (feat/wheel-slip;
+    // khi gộp đặt sau các cột này), như tools/agv_logger.py COLUMNS.
+    uint8_t  pos_on;                       // vòng vị trí đang hiệu chỉnh
+    float    pos_x, pos_y, pos_th;         // tư thế ước lượng [m, m, rad] (hệ lúc bắt đầu chạy)
+    float    pos_x_ref, pos_y_ref, pos_th_ref;  // tư thế lệnh tích phân trên ESP32 (A1)
+    float    pos_corr_vx, pos_corr_vy;     // [m/s] hiệu chỉnh cộng vào vx, vy lệnh
+    uint8_t  pos_th_src;                   // 0 encoder, 1 IMU
+    uint8_t  pos_in_pos;                   // (a) trong cửa sổ "đã tới vị trí"
+    uint8_t  still;                        // (d) logic dừng đang giữ (PWM 0)
 } log_data_t;
 
 #define LOG_KIND_DATA    0

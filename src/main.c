@@ -298,6 +298,13 @@ static void push_log(int64_t t_now, agv_velocity_t vel, const vel_ctrl_out_t *vc
         .src_switch_dwz = m->src_switch_dwz,
         .bias_updates   = m->bias_updates,
         .slip_eval      = m->slip_eval,
+        .pos_on      = vc->pos.on,
+        .pos_x       = vc->pos.x,      .pos_y     = vc->pos.y,     .pos_th     = vc->pos.th,
+        .pos_x_ref   = vc->pos.x_ref,  .pos_y_ref = vc->pos.y_ref, .pos_th_ref = vc->pos.th_ref,
+        .pos_corr_vx = vc->pos.corr_vx, .pos_corr_vy = vc->pos.corr_vy,
+        .pos_th_src  = vc->pos.th_src,
+        .pos_in_pos  = vc->pos.in_pos,
+        .still       = vc->still,
     };
     logger_push(&d);
 }
