@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "lwip/sockets.h"
+#include <math.h>
 #include <string.h>
 
 static const char *TAG = "TRAJ";
@@ -31,9 +32,13 @@ static bool _parse_packet(const uint8_t *buf, traj_setpoint_t *out)
     for (int i = 0; i < TRAJ_PACKET_LEN - 1; i++) chk ^= buf[i];
     if (chk != buf[TRAJ_PACKET_LEN - 1]) return false;
 
-    memcpy(&out->vx, &buf[1], 4);
-    memcpy(&out->vy, &buf[5], 4);
-    memcpy(&out->wz, &buf[9], 4);
+    traj_setpoint_t sp;
+    memcpy(&sp.vx, &buf[1], 4);
+    memcpy(&sp.vy, &buf[5], 4);
+    memcpy(&sp.wz, &buf[9], 4);
+    /* NaN/±Inf đúng checksum: bỏ gói (Codex P18, 05/11; ±Inf làm wrap_pi lặp mãi trong control_task) */
+    if (!isfinite(sp.vx) || !isfinite(sp.vy) || !isfinite(sp.wz)) return false;
+    *out = sp;
     return true;
 }
 

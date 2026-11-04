@@ -8,10 +8,12 @@
 // Vòng vị trí x, y (O1 PA3, Liam duyệt A1 + B1 ở phiên CODE 04/11/2026). C thuần (fwsim).
 //
 // A1: tư thế lệnh tích phân trên ESP32 từ vận tốc lệnh (hệ thân), không đổi giao thức:
-//   θ_ref += wz_ref·dt;  x_ref += (vx_ref·cos θ_ref − vy_ref·sin θ_ref)·dt;  y_ref tương tự
-// Tư thế ước lượng: vx, vy encoder (FK) xoay theo θ_est;
+//   x_ref += (vx_ref·cos θ_mid − vy_ref·sin θ_mid)·dt, θ_mid = θ_ref + wz_ref·dt/2;  y_ref tương tự
+// Tư thế ước lượng: vx, vy encoder (FK) xoay theo góc giữa tick của θ_est (cùng quy ước, Codex P7);
 //   θ_est = ψ_imu + lệch khi vòng hướng (heading.c) đang chạy, không thì tích phân wz encoder;
-//   lệch đặt lại mỗi lần chuyển sang ψ_imu để θ_est liên tục (reset chip, mất yaw).
+//   lệch chỉ đặt lại khi hệ ψ_imu đổi (heading psi0_n: bắt đầu chạy, reset chip, đổi mode) để
+//   θ_est liên tục; mất yaw rồi có lại cùng hệ thì giữ lệch cũ (Codex P2, 05/11).
+// Vật cản (Codex P1): không hiệu chỉnh về hướng bị chặn. (a)/(d): tích phân xóa (Codex P5).
 // B1: hướng do heading.c giữ; ở đây chỉ x, y. Sai số xoay về hệ thân, PI có feedforward
 // theo M6 (position_controller.m): v_cmd = v_ref + sat(Kp·e + Ki·∫e), anti-windup như M6
 // (giữ tích phân khi đầu ra bão hòa và sai số làm tích phân lớn thêm).
@@ -42,7 +44,11 @@ typedef struct {
     bool  head_on;                  // heading.c on: ψ_imu dùng được
     float dt;                       // [s]
     bool  run_active;
-    bool  hold;                     // (d) logic dừng của vel_ctrl.c đang giữ: không hiệu chỉnh, tích phân giữ
+    bool  hold;                     // (d) logic dừng của vel_ctrl.c đang giữ: không hiệu chỉnh, tích phân xóa
+    uint32_t psi0_n;                // heading.c psi0_n: đổi thì hệ ψ_imu đổi, đặt lại θ_off (Codex P2)
+    // Hướng bị chặn do vật cản (main.c s_*_blocked, hệ thân; Codex P1, 05/11): không hiệu chỉnh
+    // về phía đó, tích phân trục đó không nhận thêm
+    bool  block_fwd, block_bwd, block_left, block_right;
 } pos_in_t;
 
 typedef struct {
@@ -53,7 +59,9 @@ typedef struct {
     float    ex_b, ey_b;            // sai số hệ thân [m]
     uint8_t  th_src;                // 0 encoder, 1 IMU
     bool     in_pos;                // (a) trong cửa sổ "đã tới vị trí"
+    uint32_t reset_n;               // số lần đặt lại tư thế (mỗi lần bắt đầu chạy) từ pos_init (Codex P6)
 } pos_out_t;
+#define POS_CTRL_HAS_RESET_N 1      // fwsim fw_sim.c dò macro này (05/11)
 
 void          pos_init(const pos_params_t *p);   // NULL = mặc định
 pos_params_t *pos_params(void);

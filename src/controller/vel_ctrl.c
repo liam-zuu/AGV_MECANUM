@@ -118,10 +118,20 @@ vel_ctrl_out_t vel_ctrl_step(const vel_ctrl_in_t *in) {
         .vx_enc = o.actual.vx, .vy_enc = o.actual.vy, .wz_enc = o.actual.wz,
         .psi_imu = o.head.psi_imu, .head_on = o.head.on,
         .dt = dt, .run_active = in->run_active, .hold = g_still,
+        .psi0_n = o.head.psi0_n,
+        .block_fwd = in->block_fwd, .block_bwd = in->block_bwd,
+        .block_left = in->block_left, .block_right = in->block_right,
     };
     pos_step(&pi, &o.pos);
     vel.vx += o.pos.corr_vx;
     vel.vy += o.pos.corr_vy;
+    // Cắt vật cản lần nữa sau hiệu chỉnh (Codex P1, 05/11): interlock ở main.c chỉ thấy lệnh gốc
+    if (in->block_fwd   && vel.vx > 0.0f) vel.vx = 0.0f;
+    if (in->block_bwd   && vel.vx < 0.0f) vel.vx = 0.0f;
+    if (in->block_left  && vel.vy > 0.0f) vel.vy = 0.0f;
+    if (in->block_right && vel.vy < 0.0f) vel.vy = 0.0f;
+    o.v_cmd = (agv_velocity_t){ .vx = vel.vx, .vy = vel.vy, .wz = o.wz_cmd };
+    o.run_active = in->run_active;
 
     // Bộ đếm metric hiện tại; khi motor bật, vel_ctrl_applied() cập nhật sau khi biết PWM thực áp
     o.tick = g_tick;

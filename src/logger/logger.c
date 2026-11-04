@@ -106,15 +106,16 @@ void logger_task(void *pv) {
         "slip_flag,slip_on_count,r,bias_gz,"
         "src_switch_dwz,bias_updates,slip_eval,"
         "pos_on,pos_x,pos_y,pos_th,pos_x_ref,pos_y_ref,pos_th_ref,pos_corr_vx,pos_corr_vy,"
-        "pos_th_src,pos_in_pos,still\n";
+        "pos_th_src,pos_in_pos,still,run_active,pos_reset_n\n";
     sendto(sock, header, strlen(header), 0,
            (struct sockaddr *)&dest_addr, sizeof(dest_addr));
 
     ESP_LOGI(TAG, "Logger streaming → %s:%d", LOGGER_PC_IP, LOGGER_UDP_PORT);
 
     log_data_t data;
-    // 04/11: 768 → 1024 vì thêm cột pos_*, ws_* (dòng dài nhất ước tính khoảng 900 byte với mọi số
-    // ở biên); static để không tăng stack 4096 của task (chỉ một logger_task).
+    // 04/11: 768 → 1024 vì thêm cột pos_*, ws_*. Ước tính dòng dài nhất khoảng 820 byte (80 cột) khi
+    // mọi số thực |x| < 1e5 (miền vật lý), không phải biên kiểu C (Codex P14); dòng quá dài bị bỏ và
+    // tăng log_send_err. static để không tăng stack 4096 của task (chỉ một logger_task).
     static char buf[1024];
 
     while (1) {
@@ -149,7 +150,7 @@ void logger_task(void *pv) {
             "%u,%lu,%.4f,%.5f,"
             "%.4f,%lu,%u,"
             "%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,"
-            "%u,%u,%u\n",
+            "%u,%u,%u,%u,%lu\n",
             data.timestamp_us,
             data.fl_count, data.fr_count, data.rl_count, data.rr_count,
             data.fl_rpm,   data.fr_rpm,   data.rl_rpm,   data.rr_rpm,
@@ -175,13 +176,16 @@ void logger_task(void *pv) {
             data.src_switch_dwz, (unsigned long)data.bias_updates, (unsigned)data.slip_eval,
             (unsigned)data.pos_on, data.pos_x, data.pos_y, data.pos_th,
             data.pos_x_ref, data.pos_y_ref, data.pos_th_ref, data.pos_corr_vx, data.pos_corr_vy,
-            (unsigned)data.pos_th_src, (unsigned)data.pos_in_pos, (unsigned)data.still
+            (unsigned)data.pos_th_src, (unsigned)data.pos_in_pos, (unsigned)data.still,
+            (unsigned)data.run_active, (unsigned long)data.pos_reset_n
         );
 
         if (len > 0 && len < (int)sizeof(buf)) {
             if (sendto(sock, buf, len, 0,
                        (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0)
                 s_log_send_err++;
+        } else {
+            s_log_send_err++;           // dòng quá dài hoặc lỗi định dạng: bỏ dòng, có đếm (Codex P14)
         }
     }
 }

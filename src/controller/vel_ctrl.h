@@ -42,7 +42,11 @@ typedef struct {
     bool              motor_on;       // driver enable (SWA, hoặc hil_bench)
     bool              run_active;     // motor_on và đang chạy theo quỹ đạo VALID (MODE_AUTO)
     bool              wheels_lifted;  // bài chạy kê bánh: tắt ước lượng bias
+    // Hướng bị chặn do vật cản (main.c s_*_blocked, hệ thân; Codex P1, 05/11): lệnh sau hiệu
+    // chỉnh vị trí không đi về hướng đó
+    bool              block_fwd, block_bwd, block_left, block_right;
 } vel_ctrl_in_t;
+#define VEL_CTRL_HAS_BLOCK 1   // có block_*, v_cmd, run_active (05/11): fwsim fw_sim.c dò macro này
 
 typedef struct {
     agv_velocity_t actual;     // vận tốc thân tính từ encoder (FK)
@@ -53,6 +57,8 @@ typedef struct {
     heading_out_t    head;     // vòng giữ hướng (cột log §8)
     pos_out_t        pos;      // vòng vị trí x, y (pos_ctrl.c; mặc định BẬT)
     bool             still;    // (d) logic dừng đang giữ (PWM 0, bộ điều khiển reset)
+    agv_velocity_t   v_cmd;    // lệnh vào vòng trong: vx, vy sau hiệu chỉnh vị trí và cắt vật cản, wz_cmd
+    bool             run_active;  // bản sao đầu vào, để log (Codex P6)
 
     // Bộ đếm cộng dồn cho metric (spec S02): log mất mẫu vẫn tính đúng,
     // khoảng trống trong tick cho biết số mẫu mất. Reset ở init / set_mode.

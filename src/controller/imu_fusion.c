@@ -41,6 +41,7 @@ static struct {
 } S;
 
 static float wrap_pi(float a) {
+    if (!isfinite(a)) return 0.0f;   // ±Inf không thoát được vòng while (Codex P18, 05/11)
     while (a >  PI_F) a -= 2.0f * PI_F;
     while (a < -PI_F) a += 2.0f * PI_F;
     return a;
