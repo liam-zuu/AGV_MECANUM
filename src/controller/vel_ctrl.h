@@ -6,6 +6,7 @@
 #include "adrc.h"
 #include "imu_fusion.h"
 #include "heading.h"
+#include "wheel_slip.h"
 #include <stdint.h>
 
 // ─────────────────────────────────────────
@@ -19,6 +20,7 @@
 //
 // IMU (spec controller–IMU v2.2, 28/10): wz đo lấy từ gyro khi hợp lệ, không thì từ encoder
 // (imu_fusion.c); setpoint wz đi qua vòng giữ hướng (heading.c); vx, vy từ encoder.
+// Cờ trượt không đều giữa các bánh (wheel_slip.c, 04/11): dư thừa động học 4 bánh, chỉ ghi log.
 // Gọi MỖI tick, kể cả khi motor tắt (để theo dõi hợp lệ IMU, bias khi đứng yên, ψ_ref):
 // khi motor_on = false bộ điều khiển không chạy, pwm = 0, bộ đếm metric không đổi.
 // Cạnh motor tắt → bật: reset PID/LADRC (tích phân, ESO, u_prev). Khi motor bật, người gọi
@@ -49,6 +51,7 @@ typedef struct {
     float          wz_cmd;     // setpoint wz sau vòng giữ hướng
     imu_fusion_out_t imu;      // hợp lệ, nguồn wz, cờ trượt, bias (cột log §8)
     heading_out_t    head;     // vòng giữ hướng (cột log §8)
+    wheel_slip_out_t wslip;    // cờ trượt không đều giữa các bánh (wheel_slip.c, chỉ log; 04/11)
 
     // Bộ đếm cộng dồn cho metric (spec S02): log mất mẫu vẫn tính đúng,
     // khoảng trống trong tick cho biết số mẫu mất. Reset ở init / set_mode.

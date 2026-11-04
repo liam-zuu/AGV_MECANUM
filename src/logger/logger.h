@@ -64,6 +64,10 @@ typedef struct {
     float    src_switch_dwz;
     uint32_t bias_updates;
     uint8_t  slip_eval;        // 1: tick này xét được r; 0: không (cờ 0 không có nghĩa "không trượt")
+    // Thêm 04/11 (wheel_slip.c, trượt không đều giữa các bánh): cuối dòng để cột cũ giữ chỗ
+    float    ws_res, ws_th;    // [count] phần dư, ngưỡng trong cửa sổ
+    uint8_t  ws_flag, ws_eval;
+    uint32_t ws_on_count;
 } log_data_t;
 
 #define LOG_KIND_DATA    0

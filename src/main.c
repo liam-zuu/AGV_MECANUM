@@ -298,6 +298,11 @@ static void push_log(int64_t t_now, agv_velocity_t vel, const vel_ctrl_out_t *vc
         .src_switch_dwz = m->src_switch_dwz,
         .bias_updates   = m->bias_updates,
         .slip_eval      = m->slip_eval,
+        .ws_res         = vc->wslip.res,
+        .ws_th          = vc->wslip.th,
+        .ws_flag        = vc->wslip.flag,
+        .ws_on_count    = vc->wslip.on_count,
+        .ws_eval        = vc->wslip.eval,
     };
     logger_push(&d);
 }

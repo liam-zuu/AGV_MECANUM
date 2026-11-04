@@ -104,7 +104,8 @@ void logger_task(void *pv) {
         "wz_meas,wz_cmd,gz_fused,yaw_rad,age_g_ms,age_r_ms,gyro_n,rv_n,reset_n,"
         "g_valid,r_valid,wz_src,src_switch_count,psi_ref,e_psi,head_on,psi_reset_count,"
         "slip_flag,slip_on_count,r,bias_gz,"
-        "src_switch_dwz,bias_updates,slip_eval\n";
+        "src_switch_dwz,bias_updates,slip_eval,"
+        "ws_res,ws_th,ws_flag,ws_on_count,ws_eval\n";
     sendto(sock, header, strlen(header), 0,
            (struct sockaddr *)&dest_addr, sizeof(dest_addr));
 
@@ -143,7 +144,8 @@ void logger_task(void *pv) {
             "%.4f,%.4f,%.4f,%.4f,%.1f,%.1f,%lu,%lu,%lu,"
             "%u,%u,%u,%lu,%.4f,%.4f,%u,%lu,"
             "%u,%lu,%.4f,%.5f,"
-            "%.4f,%lu,%u\n",
+            "%.4f,%lu,%u,"
+            "%.0f,%.1f,%u,%lu,%u\n",
             data.timestamp_us,
             data.fl_count, data.fr_count, data.rl_count, data.rr_count,
             data.fl_rpm,   data.fr_rpm,   data.rl_rpm,   data.rr_rpm,
@@ -166,7 +168,9 @@ void logger_task(void *pv) {
             (unsigned long)data.src_switch_count, data.psi_ref, data.e_psi,
             (unsigned)data.head_on, (unsigned long)data.psi_reset_count,
             (unsigned)data.slip_flag, (unsigned long)data.slip_on_count, data.r, data.bias_gz,
-            data.src_switch_dwz, (unsigned long)data.bias_updates, (unsigned)data.slip_eval
+            data.src_switch_dwz, (unsigned long)data.bias_updates, (unsigned)data.slip_eval,
+            data.ws_res, data.ws_th, (unsigned)data.ws_flag, (unsigned long)data.ws_on_count,
+            (unsigned)data.ws_eval
         );
 
         if (len > 0 && len < (int)sizeof(buf)) {
