@@ -12,7 +12,7 @@
 // ─────────────────────────────────────────
 // Vòng vận tốc thân — bước 8–10 của control_task (main.c):
 //   encoder rpm → FK → hợp nhất IMU (wz) + vòng giữ hướng → vòng vị trí x, y (pos_ctrl.c,
-//   mặc định TẮT, 04/11) → bộ điều khiển (vx, vy, wz) → IK → PWM
+//   mặc định BẬT, 04/11) → bộ điều khiển (vx, vy, wz) → IK → PWM
 // Tách khỏi main.c (21/10/2026) để mô phỏng trên PC (hil-framework fwsim/)
 // biên dịch và chạy đúng mã này. File không dùng API ESP-IDF/FreeRTOS.
 //
@@ -51,7 +51,7 @@ typedef struct {
     float          wz_cmd;     // setpoint wz sau vòng giữ hướng
     imu_fusion_out_t imu;      // hợp lệ, nguồn wz, cờ trượt, bias (cột log §8)
     heading_out_t    head;     // vòng giữ hướng (cột log §8)
-    pos_out_t        pos;      // vòng vị trí x, y (pos_ctrl.c; mặc định TẮT, corr = 0)
+    pos_out_t        pos;      // vòng vị trí x, y (pos_ctrl.c; mặc định BẬT)
     bool             still;    // (d) logic dừng đang giữ (PWM 0, bộ điều khiển reset)
 
     // Bộ đếm cộng dồn cho metric (spec S02): log mất mẫu vẫn tính đúng,
@@ -61,7 +61,7 @@ typedef struct {
     uint32_t       sat_ticks[4];  // số tick có |pwm| ≥ PWM_MAX
 } vel_ctrl_out_t;
 
-// (d) Logic dừng (Liam 04/11 "đồng ý làm a+d"; mặc định TẮT, bật khi gộp do Liam quyết):
+// (d) Logic dừng (Liam 04/11 "đồng ý làm a+d"; mặc định BẬT, Liam 04/11 "làm cách 1 ban khuyến nghị đi"):
 // v_still lớn hơn đỉnh tốc độ lúc săn trên fwsim (≤ 0,045 m/s, O1_FEAS run02–run05_diag);
 // t_still để không giữ giữa lúc đổi chiều. Ngưỡng [ĐỀ XUẤT], chưa kiểm trên xe.
 typedef struct {
@@ -69,7 +69,7 @@ typedef struct {
     float   v_still;      // [m/s] [ĐỀ XUẤT 0,05]; wz dùng v_still/(LX+LY)
     int64_t t_still_us;   // [µs]  [ĐỀ XUẤT 500 000]
 } still_params_t;
-#define STILL_PARAMS_DEFAULT { .on = false, .v_still = 0.05f, .t_still_us = 500000 }
+#define STILL_PARAMS_DEFAULT { .on = true, .v_still = 0.05f, .t_still_us = 500000 }
 
 void               vel_ctrl_init(void);              // khởi tạo PID, ADRC, imu_fusion, heading; chế độ = CTRL_MODE
 still_params_t    *vel_ctrl_still_params(void);

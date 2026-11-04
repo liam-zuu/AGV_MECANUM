@@ -93,7 +93,7 @@ vel_ctrl_out_t vel_ctrl_step(const vel_ctrl_in_t *in) {
     heading_step(&hi, &o.head);
     o.wz_cmd = o.head.wz_cmd;
 
-    // ── 8c'. (d) Logic dừng (Liam 04/11 "đồng ý làm a+d"; mặc định TẮT) ───
+    // ── 8c'. (d) Logic dừng (Liam 04/11 "đồng ý làm a+d"; mặc định BẬT) ───
     // Lệnh = 0 và |vx|, |vy| < v_still, |wz| < v_still/(LX+LY) liên tục t_still → giữ: PWM 0,
     // reset PID/LADRC mỗi tick, vòng vị trí không hiệu chỉnh. Thoát khi lệnh khác 0 hoặc motor tắt;
     // đang giữ thì xe có trôi nhanh hơn ngưỡng cũng vẫn giữ (lệnh vẫn = 0).
@@ -112,7 +112,7 @@ vel_ctrl_out_t vel_ctrl_step(const vel_ctrl_in_t *in) {
         o.still = g_still;
     }
 
-    // ── 8d. Vòng vị trí x, y (pos_ctrl.c, O1 PA3; mặc định TẮT) ───────────
+    // ── 8d. Vòng vị trí x, y (pos_ctrl.c, O1 PA3; mặc định BẬT) ───────────
     pos_in_t pi = {
         .vx_ref = vel.vx, .vy_ref = vel.vy, .wz_ref = vel.wz,
         .vx_enc = o.actual.vx, .vy_enc = o.actual.vy, .wz_enc = o.actual.wz,

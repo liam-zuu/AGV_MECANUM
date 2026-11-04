@@ -16,22 +16,24 @@
 // theo M6 (position_controller.m): v_cmd = v_ref + sat(Kp·e + Ki·∫e), anti-windup như M6
 // (giữ tích phân khi đầu ra bão hòa và sai số làm tích phân lớn thêm).
 // Bắt đầu chạy (run_active lên): tư thế lệnh và ước lượng về 0, tích phân về 0.
-// Mặc định TẮT (on = false): bật để chạy thử trên fwsim; chưa có trên board, chưa tune.
+// Mặc định BẬT, cả (a) (Liam 04/11, phiên CODE: "làm cách 1 ban khuyến nghị đi"): firmware
+// chiến dịch RQ3 (env chính PID và env ladrc) cùng cấu trúc, không env riêng. Chưa tune,
+// chưa kiểm trên board. Bản không có vòng vị trí: fwsim đặt pos_on = 0 lúc chạy.
 // ─────────────────────────────────────────
 
 typedef struct {
-    bool  on;            // TẮT mặc định
+    bool  on;            // BẬT mặc định
     float kp;            // [1/s]    6  (M6 params_mecanum.m, chỉnh cho plant mô-men cũ; chưa tune)
     float ki;            // [1/s²]   3  (như trên)
     float v_corr_max;    // [m/s]    [ĐỀ XUẤT 0,5] chặn phần hiệu chỉnh mỗi trục
     // (a) cửa sổ "đã tới vị trí" khi lệnh = 0 (04/11): lớn hơn dải sai số lúc săn trên fwsim
     // (2–4 mm, O1_FEAS run05_diag), rất nhỏ so với D = 0,10 m của O1. e_win ≤ 0: tắt.
-    float e_win;         // [m]      [ĐỀ XUẤT 0,005; 0 = tắt mặc định]
+    float e_win;         // [m]      [ĐỀ XUẤT 0,005, mặc định]
     float e_exit;        // [m]      [ĐỀ XUẤT 0,010]
 } pos_params_t;
 
-#define POS_PARAMS_DEFAULT { .on = false, .kp = 6.0f, .ki = 3.0f, .v_corr_max = 0.5f, \
-                             .e_win = 0.0f, .e_exit = 0.010f }
+#define POS_PARAMS_DEFAULT { .on = true, .kp = 6.0f, .ki = 3.0f, .v_corr_max = 0.5f, \
+                             .e_win = 0.005f, .e_exit = 0.010f }
 
 typedef struct {
     float vx_ref, vy_ref, wz_ref;   // vận tốc lệnh hệ thân (sau interlock)
