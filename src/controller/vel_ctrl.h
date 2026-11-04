@@ -6,11 +6,13 @@
 #include "adrc.h"
 #include "imu_fusion.h"
 #include "heading.h"
+#include "pos_ctrl.h"
 #include <stdint.h>
 
 // ─────────────────────────────────────────
 // Vòng vận tốc thân — bước 8–10 của control_task (main.c):
-//   encoder rpm → FK → hợp nhất IMU (wz) + vòng giữ hướng → bộ điều khiển (vx, vy, wz) → IK → PWM
+//   encoder rpm → FK → hợp nhất IMU (wz) + vòng giữ hướng → vòng vị trí x, y (pos_ctrl.c,
+//   mặc định TẮT, 04/11) → bộ điều khiển (vx, vy, wz) → IK → PWM
 // Tách khỏi main.c (21/10/2026) để mô phỏng trên PC (hil-framework fwsim/)
 // biên dịch và chạy đúng mã này. File không dùng API ESP-IDF/FreeRTOS.
 //
@@ -49,6 +51,7 @@ typedef struct {
     float          wz_cmd;     // setpoint wz sau vòng giữ hướng
     imu_fusion_out_t imu;      // hợp lệ, nguồn wz, cờ trượt, bias (cột log §8)
     heading_out_t    head;     // vòng giữ hướng (cột log §8)
+    pos_out_t        pos;      // vòng vị trí x, y (pos_ctrl.c; mặc định TẮT, corr = 0)
 
     // Bộ đếm cộng dồn cho metric (spec S02): log mất mẫu vẫn tính đúng,
     // khoảng trống trong tick cho biết số mẫu mất. Reset ở init / set_mode.

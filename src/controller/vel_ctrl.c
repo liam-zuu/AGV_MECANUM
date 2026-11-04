@@ -24,6 +24,7 @@ void vel_ctrl_init(void) {
     adrc_init(&g_adrc);
     imu_fusion_init(NULL);
     heading_init(NULL);
+    pos_init(NULL);
     g_mode = CTRL_MODE;
     g_mode_event = false;
     g_pwm_zero = true;
@@ -82,6 +83,17 @@ vel_ctrl_out_t vel_ctrl_step(const vel_ctrl_in_t *in) {
     g_mode_event = false;
     heading_step(&hi, &o.head);
     o.wz_cmd = o.head.wz_cmd;
+
+    // ── 8d. Vòng vị trí x, y (pos_ctrl.c, O1 PA3; mặc định TẮT) ───────────
+    pos_in_t pi = {
+        .vx_ref = vel.vx, .vy_ref = vel.vy, .wz_ref = vel.wz,
+        .vx_enc = o.actual.vx, .vy_enc = o.actual.vy, .wz_enc = o.actual.wz,
+        .psi_imu = o.head.psi_imu, .head_on = o.head.on,
+        .dt = dt, .run_active = in->run_active,
+    };
+    pos_step(&pi, &o.pos);
+    vel.vx += o.pos.corr_vx;
+    vel.vy += o.pos.corr_vy;
 
     // Bộ đếm metric hiện tại; khi motor bật, vel_ctrl_applied() cập nhật sau khi biết PWM thực áp
     o.tick = g_tick;
