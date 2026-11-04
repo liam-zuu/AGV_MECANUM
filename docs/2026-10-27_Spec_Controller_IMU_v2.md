@@ -24,6 +24,7 @@
 | §11 (mới) | Mục thuộc giả lập H7 (G0): `imu_seq`, dải gia tốc, cận số G3/G4: trạng thái và chỗ xử lý | C2-#9, #10, #12 |
 | §6.1, §7, §9 (28/10, Codex nhóm B, **Liam duyệt ở phiên CODE**) | #14 câu `r` ở §6.1 (`r = r_true + s·wz_thân`); #13 tiêu chí khởi tạo chỉ đếm report dùng được sau reset gần nhất; §9: #1 reset PID/LADRC ở cạnh motor tắt → bật, #12 điều kiện đứng yên và bộ đếm metric theo PWM thực áp sau lớp cắt vật cản (`vel_ctrl_applied`), #6 setpoint + thời điểm quỹ đạo đọc/ghi trong spinlock; #5 `missing_pct` theo `log_seq` + `#run_end` (`tools/s02_metrics.py`) | `docs/review/2026-10-28_Review_ctrl-imu_vong1.md` |
 | §14 (mới), §8, §9 (04/11, v2.3) | Vòng vị trí x, y (A1 + B1), (a), (d), mặc định BẬT; 12 cột log `pos_*`, `still` | Liam 04/11 ở phiên CODE: "được tôi duyệt, làm A1 + B1", "đồng ý làm a+d", "làm cách 1 ban khuyến nghị đi", "Làm cột log"; Liam chọn PA3 ở phiên THESIS (hồ sơ O1 mục 8) |
+| §14, §8 (05/11, v2.4) | Sửa theo Codex Sol vòng 1: vật cản, `θ_off`, tích phân, cột `run_active` + `pos_reset_n`, góc giữa tick, gói không hữu hạn; (d) giữ như cũ, ghi giới hạn | Liam 05/11 ở phiên CODE: "Duyệt theo khuyến nghị" (P3 + P4 chọn (A)) |
 | §4.2, §6, §8, §13.1 (28/10, Codex rà code `ctrl-imu`) | Ngưỡng bão hòa gyro 34,9 → **31,4 rad/s** (N2: 0,9 × 34,9); cờ trượt khi không xét được theo §13.1 + cột log `slip_eval` (**#8 = (c), Liam duyệt 28/10 ở phiên CODE**); thêm cột log `src_switch_dwz`, `bias_updates` (#11) | `docs/review/2026-10-28_Review_ctrl-imu_vong1.md` |
 
 ## 1. Đã chốt (Liam 22/10)
@@ -192,7 +193,7 @@ Hệ quả: nạp firmware xe thì phải bật SWA mới chạy motor; nạp b�
 
 ## 8. Log và metric
 
-**Cột thêm (100 Hz):** `wz_enc`, `gz`, `yaw` (rad), `age_g_ms`, `age_r_ms`, `gyro_n`, `rv_n`, `reset_n`, `g_valid`, `r_valid`, `wz_src` (0 = encoder, 1 = IMU), `psi_ref`, `e_psi`, `head_on`, `slip_flag`, `r`, `psi_reset_count`, `bias_gz`, `log_seq`, `log_qdrop`, `log_send_err`; thêm 28/10 ở cuối dòng: `src_switch_dwz`, `bias_updates` (Codex #11), `slip_eval` (§6, #8 (c)). Giữ tên cột cũ; đơn vị yaw ghi trong header log. Log firmware `ctrl-imu` nay 66 cột. *(v2.3, 04/11)* Thêm cuối dòng 12 cột vòng vị trí (§14.6): 78 cột ở `feat/pos-loop`; firmware chiến dịch thêm 5 cột `ws_*` của `feat/wheel-slip` **sau** các cột này, tổng 83 cột như `tools/agv_logger.py` (hil-framework `feat/log-pos-ws`).
+**Cột thêm (100 Hz):** `wz_enc`, `gz`, `yaw` (rad), `age_g_ms`, `age_r_ms`, `gyro_n`, `rv_n`, `reset_n`, `g_valid`, `r_valid`, `wz_src` (0 = encoder, 1 = IMU), `psi_ref`, `e_psi`, `head_on`, `slip_flag`, `r`, `psi_reset_count`, `bias_gz`, `log_seq`, `log_qdrop`, `log_send_err`; thêm 28/10 ở cuối dòng: `src_switch_dwz`, `bias_updates` (Codex #11), `slip_eval` (§6, #8 (c)). Giữ tên cột cũ; đơn vị yaw ghi trong header log. Log firmware `ctrl-imu` nay 66 cột. *(v2.3, 04/11)* Thêm cuối dòng 14 cột vòng vị trí (§14.6; 12 cột ở v2.3, thêm `run_active`, `pos_reset_n` ở v2.4): 80 cột ở `feat/pos-loop`; firmware chiến dịch thêm 5 cột `ws_*` của `feat/wheel-slip` **sau** các cột này, tổng 85 cột như `tools/agv_logger.py` (hil-framework `feat/log-pos-ws`).
 
 **Metric (giữ v1):**
 - Khi điều khiển theo gyro, e_wz tính từ chính gz không còn khách quan: SIM/HIL so với giá trị thật của plant; xe thật so với camera (QĐ 7, 8). Log luôn có cả `wz_enc` lẫn `gz`.
