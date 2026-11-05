@@ -51,11 +51,33 @@ typedef enum {
     TRAJ_SRC_WIFI,
 } traj_source_t;
 
+/* ── Snapshot of the last packet (DUT group 1, Liam 29/10) ────────────── */
+/* One consistent copy, taken under the receiver lock. t_rx_us is the time the
+ * packet was received, so a consumer that stamps freshness with it keeps ONE
+ * timeout (TRAJ_TIMEOUT_MS) from the last packet. Before, traj_task stamped the
+ * time it saw a still-fresh setpoint, so control_task could keep an old
+ * setpoint up to about 2 × 200 ms after the last packet. */
+typedef struct {
+    traj_setpoint_t sp;
+    traj_source_t   src;          /* source of that packet (NONE before the first) */
+    int64_t         t_rx_us;      /* esp_timer time it was received, 0 = none yet */
+    uint32_t        n_rx;         /* packets committed since boot */
+    uint32_t        udp_ignored;  /* good UDP packets dropped (env hil_bench, TRAJ_UART_ONLY) */
+} traj_snapshot_t;
+
 /* ── Public API ───────────────────────────────────────────────────────── */
 
 /* Init UART + WiFi UDP socket, spawn receiver tasks.
- * Call after wifi_init() if WiFi source is needed. */
+ * Call after wifi_init() if WiFi source is needed.
+ * Build flag TRAJ_UART_ONLY (env hil_bench): only the UART source is used; good
+ * UDP packets are dropped and counted in udp_ignored. */
 void traj_receiver_init(void);
+
+/* Last packet, not timed out by this call (check with traj_receiver_is_fresh). */
+void traj_receiver_snapshot(traj_snapshot_t *out);
+
+/* true if the snapshot's packet is at most TRAJ_TIMEOUT_MS old at now_us */
+bool traj_receiver_is_fresh(const traj_snapshot_t *s, int64_t now_us);
 
 /* Get current setpoint. Returns zeros if timed out (fail-safe).
  * Thread-safe — can be called from any task. */

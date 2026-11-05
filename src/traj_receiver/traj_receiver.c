@@ -10,12 +10,18 @@
 static const char *TAG = "TRAJ";
 
 /* ── Shared state ─────────────────────────────────────────────────────── */
-static volatile traj_setpoint_t g_setpoint  = {0};
-static volatile int64_t         g_last_us   = 0;   /* timestamp of last valid packet (µs) */
-static volatile traj_source_t   g_source    = TRAJ_SRC_NONE;
-static volatile uint32_t        g_uart_ok   = 0;   /* UART packets with a good XOR */
-static volatile uint32_t        g_uart_bad  = 0;   /* UART packets with a bad XOR  */
-static volatile int64_t         g_uart_last_us = 0;
+/* Setpoint, source, receive time and counters are written by the UART and the
+ * WiFi task and read by traj_task / led_task: all accesses go through g_mux so a
+ * reader never gets fields of two packets (DUT group 1, Liam 29/10, Q5a). */
+static portMUX_TYPE             g_mux       = portMUX_INITIALIZER_UNLOCKED;
+static traj_setpoint_t          g_setpoint  = {0};
+static int64_t                  g_last_us   = 0;   /* esp_timer time the last valid packet was received (µs) */
+static traj_source_t            g_source    = TRAJ_SRC_NONE;
+static uint32_t                 g_n_rx      = 0;   /* packets committed */
+static uint32_t                 g_uart_ok   = 0;   /* UART packets with a good XOR */
+static uint32_t                 g_uart_bad  = 0;   /* UART packets with a bad XOR  */
+static int64_t                  g_uart_last_us = 0;
+static uint32_t                 g_udp_ignored  = 0; /* good UDP packets dropped (TRAJ_UART_ONLY) */
 
 /* ── Packet parser — dùng chung cho cả 2 nguồn ───────────────────────── */
 /*
@@ -38,11 +44,19 @@ static bool _parse_packet(const uint8_t *buf, traj_setpoint_t *out)
 }
 
 /* ── Commit parsed setpoint (called from either task) ────────────────── */
-static void _commit(const traj_setpoint_t *sp, traj_source_t src)
+/* t_rx_us: time the packet was read, taken before the lock */
+static void _commit(const traj_setpoint_t *sp, traj_source_t src, int64_t t_rx_us)
 {
+    taskENTER_CRITICAL(&g_mux);
     g_setpoint = *sp;
-    g_last_us  = esp_timer_get_time();
+    g_last_us  = t_rx_us;
     g_source   = src;
+    g_n_rx++;
+    if (src == TRAJ_SRC_UART) {
+        g_uart_ok++;
+        g_uart_last_us = t_rx_us;
+    }
+    taskEXIT_CRITICAL(&g_mux);
 }
 
 /* ── UART receiver task ───────────────────────────────────────────────── */
@@ -76,11 +90,11 @@ static void _uart_task(void *pv)
             if (pkt_idx == TRAJ_PACKET_LEN) {
                 traj_setpoint_t sp;
                 if (_parse_packet(pkt, &sp)) {
-                    _commit(&sp, TRAJ_SRC_UART);
-                    g_uart_ok++;
-                    g_uart_last_us = g_last_us;
+                    _commit(&sp, TRAJ_SRC_UART, esp_timer_get_time());
                 } else {
+                    taskENTER_CRITICAL(&g_mux);
                     g_uart_bad++;
+                    taskEXIT_CRITICAL(&g_mux);
                     /* Checksum fail — resync */
                     ESP_LOGW(TAG, "UART checksum fail, resyncing");
                 }
@@ -130,8 +144,17 @@ static void _wifi_task(void *pv)
         if (n == TRAJ_PACKET_LEN) {
             traj_setpoint_t sp;
             if (_parse_packet(buf, &sp)) {
-                _commit(&sp, TRAJ_SRC_WIFI);
+#ifdef TRAJ_UART_ONLY
+                /* HIL bench (env hil_bench): setpoints come only from the H7
+                 * relay; a UDP packet is counted and dropped (build difference
+                 * HIL vs car, Outline QĐ 6) */
+                taskENTER_CRITICAL(&g_mux);
+                g_udp_ignored++;
+                taskEXIT_CRITICAL(&g_mux);
+#else
+                _commit(&sp, TRAJ_SRC_WIFI, esp_timer_get_time());
                 ESP_LOGI(TAG, "WiFi pkt: vx=%.2f vy=%.2f wz=%.2f", sp.vx, sp.vy, sp.wz);  // thêm
+#endif
             } else {
                 ESP_LOGW(TAG, "WiFi checksum fail");
             }
@@ -160,36 +183,59 @@ void traj_receiver_init(void)
     xTaskCreatePinnedToCore(_uart_task, "traj_uart", 4096, NULL, 4, NULL, 0);
     xTaskCreatePinnedToCore(_wifi_task, "traj_wifi", 4096, NULL, 3, NULL, 0);
 
+#ifdef TRAJ_UART_ONLY
+    ESP_LOGI(TAG, "traj_receiver init done (UART=%d only; UDP %d packets dropped and counted)",
+             TRAJ_UART_NUM, TRAJ_UDP_PORT);
+#else
     ESP_LOGI(TAG, "traj_receiver init done (UART=%d, UDP=%d)",
              TRAJ_UART_NUM, TRAJ_UDP_PORT);
+#endif
+}
+
+void traj_receiver_snapshot(traj_snapshot_t *out)
+{
+    taskENTER_CRITICAL(&g_mux);
+    out->sp          = g_setpoint;
+    out->src         = g_source;
+    out->t_rx_us     = g_last_us;
+    out->n_rx        = g_n_rx;
+    out->udp_ignored = g_udp_ignored;
+    taskEXIT_CRITICAL(&g_mux);
+}
+
+bool traj_receiver_is_fresh(const traj_snapshot_t *s, int64_t now_us)
+{
+    return s->t_rx_us > 0 && (now_us - s->t_rx_us) <= (int64_t)TRAJ_TIMEOUT_MS * 1000LL;
 }
 
 traj_setpoint_t traj_receiver_get(void)
 {
     /* Fail-safe: nếu không có packet mới trong TRAJ_TIMEOUT_MS → trả về 0 */
-    int64_t now = esp_timer_get_time();
-    if (g_last_us == 0 ||
-        (now - g_last_us) > (int64_t)TRAJ_TIMEOUT_MS * 1000LL) {
+    traj_snapshot_t s;
+    traj_receiver_snapshot(&s);
+    if (!traj_receiver_is_fresh(&s, esp_timer_get_time())) {
         return (traj_setpoint_t){0};
     }
-    return g_setpoint;
+    return s.sp;
 }
 
 void traj_receiver_stats(uint32_t *ok, uint32_t *bad, int64_t *last_us)
 {
+    taskENTER_CRITICAL(&g_mux);
     *ok      = g_uart_ok;
     *bad     = g_uart_bad;
     *last_us = g_uart_last_us;
+    taskEXIT_CRITICAL(&g_mux);
 }
 
 traj_source_t traj_receiver_source(void)
 {
-    int64_t now = esp_timer_get_time();
-    if (g_last_us == 0 ||
-        (now - g_last_us) > (int64_t)TRAJ_TIMEOUT_MS * 1000LL) {
+    traj_snapshot_t s;
+    traj_receiver_snapshot(&s);
+    if (!traj_receiver_is_fresh(&s, esp_timer_get_time())) {
         return TRAJ_SRC_NONE;
     }
-    return g_source;
+    return s.src;
 }
 
 void traj_receiver_send_status(float vx, float vy, float wz)
