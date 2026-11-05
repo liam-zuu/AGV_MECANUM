@@ -38,6 +38,9 @@ static bool _parse_packet(const uint8_t *buf, traj_setpoint_t *out)
     memcpy(&sp.wz, &buf[9], 4);
     /* NaN/±Inf đúng checksum: bỏ gói (Codex P18, 05/11; ±Inf làm wrap_pi lặp mãi trong control_task) */
     if (!isfinite(sp.vx) || !isfinite(sp.vy) || !isfinite(sp.wz)) return false;
+    /* Ngoài miền: bỏ gói (Codex vòng 2 P18). Miền rộng hơn giới hạn vật lý của xe
+     * (bánh 34,56 rad/s × r 0,0485 m ≈ 1,68 m/s; quay ≈ 7 rad/s), chỉ chặn gói hỏng */
+    if (fabsf(sp.vx) > TRAJ_V_MAX || fabsf(sp.vy) > TRAJ_V_MAX || fabsf(sp.wz) > TRAJ_W_MAX) return false;
     *out = sp;
     return true;
 }

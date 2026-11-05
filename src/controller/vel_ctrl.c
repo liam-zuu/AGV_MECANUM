@@ -163,6 +163,18 @@ vel_ctrl_out_t vel_ctrl_step(const vel_ctrl_in_t *in) {
         o.ctrl_out.vy = vel.vy + pid_update_vy(&g_pid, vel.vy, o.actual.vy, dt);
         o.ctrl_out.wz = o.wz_cmd + pid_update_wz(&g_pid, o.wz_cmd, wz_meas, dt);
     }
+    // Đầu ra vòng trong không đi vào hướng bị chặn (Codex vòng 2 P1): tích phân PID hay ESO còn
+    // lại có thể đẩy xe về phía vật cản khi lệnh đã về 0; hard cutoff ở main.c chỉ xét intent
+    // và v_cmd. Kẹp từng trục (không cắt cả 4 PWM) để vẫn đi ngang được khi trước bị chặn.
+    // ESO nhận u đã kẹp, như khi bão hòa.
+    if ((in->block_fwd && o.ctrl_out.vx > 0.0f) || (in->block_bwd && o.ctrl_out.vx < 0.0f)) {
+        o.ctrl_out.vx = 0.0f;
+        if (g_mode == CTRL_ADRC) g_adrc.vx.u_prev = 0.0f;
+    }
+    if ((in->block_left && o.ctrl_out.vy > 0.0f) || (in->block_right && o.ctrl_out.vy < 0.0f)) {
+        o.ctrl_out.vy = 0.0f;
+        if (g_mode == CTRL_ADRC) g_adrc.vy.u_prev = 0.0f;
+    }
 
     // ── 10. Inverse kinematics → PWM ─────────────────────────────────────
     wheel_velocity_t wheels = kinematics_inverse(o.ctrl_out);

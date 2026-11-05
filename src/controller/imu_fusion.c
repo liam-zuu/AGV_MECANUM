@@ -42,6 +42,9 @@ static struct {
 
 static float wrap_pi(float a) {
     if (!isfinite(a)) return 0.0f;   // ±Inf không thoát được vòng while (Codex P18, 05/11)
+    // Số hữu hạn lớn: float32 quanh 1e10 có a − 2π == a, vòng while không thoát (Codex vòng 2 P18).
+    // Chỉ dùng remainderf khi |a| lớn để giá trị thường giữ nguyên từng bit như trước.
+    if (fabsf(a) > 4.0f * PI_F) a = remainderf(a, 2.0f * PI_F);
     while (a >  PI_F) a -= 2.0f * PI_F;
     while (a < -PI_F) a += 2.0f * PI_F;
     return a;

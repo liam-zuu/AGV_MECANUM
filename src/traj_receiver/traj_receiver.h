@@ -36,6 +36,8 @@
 #define TRAJ_START_BYTE     0xBB
 #define TRAJ_PACKET_LEN     14          /* 1 + 4 + 4 + 4 + 1 */
 #define TRAJ_TIMEOUT_MS     200
+#define TRAJ_V_MAX          2.0f        /* |vx|, |vy| [m/s] lớn hơn: bỏ gói [ĐỀ XUẤT, Codex vòng 2 P18] */
+#define TRAJ_W_MAX          10.0f       /* |wz| [rad/s] lớn hơn: bỏ gói [ĐỀ XUẤT] */
 
 /* ── Setpoint struct ──────────────────────────────────────────────────── */
 typedef struct {

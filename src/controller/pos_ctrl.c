@@ -21,6 +21,9 @@ static uint32_t s_reset_n;  // số lần đặt lại tư thế; không nằm t
 
 static float wrap_pi(float a) {
     if (!isfinite(a)) return 0.0f;   // ±Inf không thoát được vòng while (Codex P18, 05/11)
+    // Số hữu hạn lớn: float32 quanh 1e10 có a − 2π == a, vòng while không thoát (Codex vòng 2 P18).
+    // Chỉ dùng remainderf khi |a| lớn để giá trị thường giữ nguyên từng bit như trước.
+    if (fabsf(a) > 4.0f * PI_F) a = remainderf(a, 2.0f * PI_F);
     while (a >  PI_F) a -= 2.0f * PI_F;
     while (a < -PI_F) a += 2.0f * PI_F;
     return a;
@@ -41,7 +44,7 @@ static int   sgn(float v) { return (v > 0.0f) - (v < 0.0f); }
 // Một trục PI có anti-windup như M6: tích phân mới chỉ nhận khi đầu ra thử chưa bão hòa
 // hoặc sai số khác dấu với tích phân cũ (sign(e) ~= sign(int) của M6).
 // Hướng dương/âm của trục bị chặn (vật cản, Codex P1): đầu ra về phía đó = 0 và tích phân
-// không nhận thêm (giữ giá trị trước tick).
+// không lớn thêm (chỉ được xả về 0).
 static float axis(float e, float *integ, float dt, bool block_pos, bool block_neg) {
     float i_old = *integ;
     float i_new = i_old + e * dt;
@@ -49,7 +52,9 @@ static float axis(float e, float *integ, float dt, bool block_pos, bool block_ne
     if (fabsf(u) < P.v_corr_max || sgn(e) != sgn(i_old)) *integ = i_new;
     float out = sat(P.kp * e + P.ki * *integ, P.v_corr_max);
     if ((out > 0.0f && block_pos) || (out < 0.0f && block_neg)) {
-        *integ = i_old;
+        // Không cho tích phân lớn thêm về phía bị chặn, nhưng vẫn cho xả (|i_new| < |i_old|), để
+        // lúc hết chặn không còn lệnh Ki·∫e cũ (Codex vòng 2 P1)
+        if (fabsf(*integ) > fabsf(i_old)) *integ = i_old;
         out = 0.0f;
     }
     return out;
