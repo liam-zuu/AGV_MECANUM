@@ -20,6 +20,8 @@
 | §10 | fwsim: `v_true` lấy từ trạng thái thân của plant; luật chọn tần số đúng thứ nguyên | C2-#2, #3 |
 | §10 (v2.1) | Ca "IMU hợp lệ suốt" ở μ danh định + điều kiện `r_true`; sàn tuyệt đối `ΔPWM_min`; thí nghiệm tần số là dữ liệu phát triển | V1, V9, V11 |
 | §11 (mới) | Mục thuộc giả lập H7 (G0): `imu_seq`, dải gia tốc, cận số G3/G4: trạng thái và chỗ xử lý | C2-#9, #10, #12 |
+| §6.1, §7, §9 (28/10, Codex nhóm B, **Liam duyệt ở phiên CODE**) | #14 câu `r` ở §6.1 (`r = r_true + s·wz_thân`); #13 tiêu chí khởi tạo chỉ đếm report dùng được sau reset gần nhất; §9: #1 reset PID/LADRC ở cạnh motor tắt → bật, #12 điều kiện đứng yên và bộ đếm metric theo PWM thực áp sau lớp cắt vật cản (`vel_ctrl_applied`), #6 setpoint + thời điểm quỹ đạo đọc/ghi trong spinlock; #5 `missing_pct` theo `log_seq` + `#run_end` (`tools/s02_metrics.py`) | `docs/review/2026-10-28_Review_ctrl-imu_vong1.md` |
+| §4.2, §6, §8, §13.1 (28/10, Codex rà code `ctrl-imu`) | Ngưỡng bão hòa gyro 34,9 → **31,4 rad/s** (N2: 0,9 × 34,9); cờ trượt khi không xét được theo §13.1 + cột log `slip_eval` (**#8 = (c), Liam duyệt 28/10 ở phiên CODE**); thêm cột log `src_switch_dwz`, `bias_updates` (#11) | `docs/review/2026-10-28_Review_ctrl-imu_vong1.md` |
 
 ## 1. Đã chốt (Liam 22/10)
 
@@ -43,14 +45,14 @@
 
 | Chỗ | Vấn đề | Trạng thái |
 |---|---|---|
-| `controller/vel_ctrl.c` | wz đo lấy từ encoder; IMU không tham gia | Chờ làm |
+| `controller/vel_ctrl.c` | wz đo lấy từ encoder; IMU không tham gia | **28/10 đã làm (nhánh `ctrl-imu`, đợt 1):** `imu_fusion.c` (§4, §6), `heading.c` (§5), `vel_ctrl_step` nhận `vel_ctrl_in_t` và gọi mỗi tick kể cả khi motor tắt; kiểm trên fwsim (`hil-framework` nhánh `ctrl-imu`, `fwsim/tests/test_fwsim_imu.py`); biên dịch ESP32, **chưa nạp** |
 | `imu/imu.cpp:69-96` | Thời điểm `esp_timer` + bộ đếm 32 bit mỗi report, hook cho log | Đã có (22/10) |
-| `imu/imu.cpp`, `main.c` | Khởi tạo lỗi chỉ in log rồi chạy tiếp | Chờ làm (§7) |
-| `BNO08xSH2HAL.cpp:143` | Sự kiện `SH2_RESET` của chip chỉ đặt bit nội bộ cho thư viện bật lại report; ứng dụng không biết chip đã reset | Chờ làm (§4.1) |
+| `imu/imu.cpp`, `main.c` | Khởi tạo lỗi chỉ in log rồi chạy tiếp | **28/10 đợt 2 (`ctrl-imu`):** `imu_init()` trả mã lỗi, thư viện chạy trong task riêng, chờ tối đa `T_init`, đạt khi đủ `N_init` report gyro + game RV; `main.c` lỗi thì không bật motor, LED xanh dương nháy + còi 1 dài 5 ngắn; biên dịch, **chưa nạp** |
+| `BNO08xSH2HAL.cpp:143` | Sự kiện `SH2_RESET` của chip chỉ đặt bit nội bộ cho thư viện bật lại report; ứng dụng không biết chip đã reset | **28/10 đợt 2:** `hal_cb` gọi `imu_note_chip_reset()` (`reset_n`, `reset_t_us`); bản weak trong thư viện để link được một mình. Không ghi vào bug log M7 (thêm chức năng, không phải lỗi) |
 | `src/main.c:255` | `#define HIL_BYPASS_MOTOR_ENABLE` đặt cứng cho **mọi** env, kể cả firmware xe: gạt SWA không tắt motor | Đề xuất §7b, chờ Liam duyệt |
 | `ibus/ibus.c:86-97` | Mất byte 20 ms thì `valid = false`; dòng dừng motor khi failsafe còn TODO | Đi cùng §7b |
-| `logger/logger.c:41,90,131` | Hàng đợi không chờ, `sendto` không kiểm lỗi, không đếm | §8 |
-| `test_imu_log.c:67` | In `IMU READY` cả khi khởi tạo lỗi (C2-N1) | §7 |
+| `logger/logger.c:41,90,131` | Hàng đợi không chờ, `sendto` không kiểm lỗi, không đếm | **28/10 đợt 2:** `log_seq`, `log_qdrop`, `log_send_err`, `motor_on` (dòng 10 Hz khi motor tắt), `imu_init`, 21 cột IMU/vòng hướng; dòng `#run_end` ×3 khi motor bật → tắt; PC `tools/agv_logger.py` (hil-framework `ctrl-imu`) đọc 28/37/63 cột (63 → **66** sau sửa Codex #11, #8 cùng ngày), tách dòng `#` ra `<file>.events.txt`; `s02_metrics.py` bỏ dòng `motor_on = 0` |
+| `test_imu_log.c:67` | In `IMU READY` cả khi khởi tạo lỗi (C2-N1) | **28/10 đợt 2:** chỉ in `IMU READY v2 period_us=… init_ms=…` khi đạt, lỗi in `IMU INIT FAIL <mã> …`; `imu_capture.py`, `g2_bno_check.py` đọc được dòng mới |
 | H7 giả lập BNO085 | `hil-framework` `g2-bno-h7`: lõi + SPI4/INT/RST, RPi5 gửi IMU không nhiễu (`rpi5/imu_model.py`) | Đã biên dịch, **chưa nạp, chưa kiểm G2** |
 
 ## 3. Dữ liệu IMU đưa vào controller
@@ -79,7 +81,7 @@ Vòng điều khiển 100 Hz giữ mẫu gần nhất của từng report (zero-
 | Đã nhận ít nhất một mẫu sau lần reset gần nhất | có | có | — |
 | Tuổi mẫu | `age_g ≤ T_age` | `age_r ≤ T_age` | `T_age` = 2,5 chu kỳ report [ĐỀ XUẤT: 125 ms ở 20 Hz, 25 ms ở 100 Hz] |
 | Giá trị hữu hạn | có | có | — |
-| Không bão hòa | `|gz| < 0,9 × 2000 °/s` (34,9 rad/s) | — | dải gyro ±2000 °/s (cấu hình hiện tại; kiểm SH-2 manual khi chốt) |
+| Không bão hòa | `|gz| < 0,9 × 2000 °/s` (31,4 rad/s; ~~34,9~~ [SỬA 28/10, Codex N2: 34,9 rad/s là 2000 °/s, chưa nhân 0,9]) | — | dải gyro ±2000 °/s (cấu hình hiện tại; kiểm SH-2 manual khi chốt) |
 | Không vừa reset | đã qua `T_settle` sau `reset_t_us` | như gyro; gốc yaw đổi nên vòng hướng đặt lại `ψ0` (§5) | `T_settle` [ĐỀ XUẤT: 0,5 s] |
 
 **wz dùng IMU khi gyro hợp lệ. Vòng hướng chạy khi yaw hợp lệ.** Hai điều kiện độc lập.
@@ -130,6 +132,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 
 - `r = wz_enc − gz`, chỉ xét khi gyro hợp lệ, có mẫu mới **và bánh đang quay**: `max_i |ω_i| ≥ ω_min` [ĐỀ XUẤT: `ω_min` = 2 rad/s, khoảng 4 count mỗi tick] (C2-#14). Bánh đứng yên thì không xét (kẹt cứng: encoder và gyro đều gần 0, cờ không bật là đúng).
 - Bật cờ khi `|r| > r_th` liên tục `T_slip`; tắt khi `|r| < r_th/2` liên tục `T_slip`.
+- **Khi không xét được** (gyro không hợp lệ hoặc `max_i |ω_i| < ω_min`): cờ đang bật thì tắt sau `T_slip` liên tục không xét được; timer bật đặt lại. Log có cột **`slip_eval`** (1 = tick này xét được `r`, 0 = không), nên `slip_flag = 0` cùng `slip_eval = 0` là "không xét được", không phải "không trượt"; đếm cờ ở §6.1 (X3, X4, ca không bơm) báo kèm % tick `slip_eval = 1`. (**Liam duyệt 28/10 ở phiên CODE**, Codex `ctrl-imu` #8 phương án (c).)
 - `r_th = k_r × √(σ_gz² + q_wz²)`: `q_wz` = 0,0196 rad/s (RMS lượng tử wz encoder, `03_CODE/CLAUDE.md`), `σ_gz` từ phép đo nhiễu. [ĐỀ XUẤT: `k_r` = 4, `T_slip` = 200 ms.]
 - Cờ chỉ ghi log và báo panel/LED; **không** đổi nguồn wz, không đổi gain.
 
@@ -137,7 +140,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 
 **Trên SIM/HIL: cách C (bơm có kiểm soát) trên nền plant cách A (Liam 27/10 khuya, §1b.4).**
 
-- **Bơm vào đâu (V2, Liam chốt (a)):** **ở đầu vào mô hình gyro**: gyro giả thấy `(1 − s)·wz_thân` trong khoảng bơm, trạng thái plant không đổi, nên `r` biết chính xác và không phụ thuộc A. Luận văn gọi là *controlled IMU–encoder inconsistency injection*; trượt vật lý để cho A. *(Phương án (b) bơm vào trạng thái thân: không chọn.)* Vì bơm nằm ở mô hình IMU, chỗ code là `rpi5/imu_model.py` (dùng chung RPi5 và fwsim), không phải `plant_step.py`. Đây là năng lực của bộ HIL, thuộc claim C7 Ch. 3 (V8, Liam chốt (a); THESIS sửa `.tex` sau khi Liam duyệt câu chữ). Khoảng bơm `[t0, t0 + T_inj]` khóa trước. Python plant (RPi5) và fwsim dùng chung code. C là **tín hiệu thử**, không kiểm fidelity.
+- **Bơm vào đâu (V2, Liam chốt (a)):** **ở đầu vào mô hình gyro**: gyro giả thấy `(1 − s)·wz_thân` trong khoảng bơm, trạng thái plant không đổi. ~~nên `r` biết chính xác và không phụ thuộc A~~ *[SỬA 28/10, Codex `ctrl-imu` #14, Liam duyệt]:* phần bơm `s·wz_thân` biết chính xác và không phụ thuộc A; còn `r` tổng là `r = r_true + s·wz_thân` (bỏ qua lượng tử encoder), với `r_true` là trượt thật của plant A. Vì vậy các ca bơm chạy ở **μ danh định** và chỉ tính khi `|r_true| < r_th/2` suốt lượt (như ca không bơm, V1), để `r` gần bằng phần bơm. Luận văn gọi là *controlled IMU–encoder inconsistency injection*; trượt vật lý để cho A. *(Phương án (b) bơm vào trạng thái thân: không chọn.)* Vì bơm nằm ở mô hình IMU, chỗ code là `rpi5/imu_model.py` (dùng chung RPi5 và fwsim), không phải `plant_step.py`. Đây là năng lực của bộ HIL, thuộc claim C7 Ch. 3 (V8, Liam chốt (a); THESIS sửa `.tex` sau khi Liam duyệt câu chữ). Khoảng bơm `[t0, t0 + T_inj]` khóa trước. Python plant (RPi5) và fwsim dùng chung code. C là **tín hiệu thử**, không kiểm fidelity.
 - **Trượt thật của plant A (V1):** plant A ghi thêm `r_true = wz_suy_từ_bánh − wz_thân` mỗi bước (từ trạng thái plant). Mỗi lần cờ bật được phân loại **đúng** (`|r_true| ≥ r_th/2`, hoặc đang trong cửa sổ bơm) hay **nhầm**.
 - **Đặt ca theo biên độ r mục tiêu (V3):** ca dưới ngưỡng `r ≈ 0,5·r_th`, ca trên ngưỡng `r ≥ 2·r_th`; `s` của từng bài tính sau khi đo nhiễu (K1, ra `σ_gz`), khóa cùng các ngưỡng khác (QĐ 21).
 
@@ -163,7 +166,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 
 ## 7. Khởi tạo và báo lỗi
 
-- `imu_init()` trả mã lỗi. Khởi tạo **đạt** khi trong `T_init` [ĐỀ XUẤT: 2 s] nhận được ít nhất `N_init` report **gyro và game RV** [ĐỀ XUẤT: 3 mỗi loại], không chỉ dựa vào `sh2_open` (thư viện có thể báo thành công giả hoặc treo: G0 v1 R1, R2, R10).
+- `imu_init()` trả mã lỗi. Khởi tạo **đạt** khi trong `T_init` [ĐỀ XUẤT: 2 s] nhận được ít nhất `N_init` report **gyro và game RV** [ĐỀ XUẤT: 3 mỗi loại] **dùng được** (gyro hữu hạn, `|gz|` dưới ngưỡng bão hòa §4.2; game RV hữu hạn), **đếm từ lần reset chip gần nhất** (Codex `ctrl-imu` #13, Liam duyệt 28/10), không chỉ dựa vào `sh2_open` (thư viện có thể báo thành công giả hoặc treo: G0 v1 R1, R2, R10).
 - Watchdog: `imu_init` chạy trong task riêng có hạn `T_init`; quá hạn là lỗi.
 - Lỗi khởi tạo → không bật motor, ở trạng thái lỗi:
   - **xe thật (Liam 27/10):** LED RGB (GPIO48) **xanh dương nháy** (Liam 28/10) + còi (GPIO17) **1 tiếng dài rồi 5 tiếng ngắn**, lặp [ĐỀ XUẤT: dài 600 ms, nghỉ 200 ms, ngắn 120 ms bật / 120 ms tắt, lặp mỗi 3 s];
@@ -186,7 +189,7 @@ Hệ quả: nạp firmware xe thì phải bật SWA mới chạy motor; nạp b�
 
 ## 8. Log và metric
 
-**Cột thêm (100 Hz):** `wz_enc`, `gz`, `yaw` (rad), `age_g_ms`, `age_r_ms`, `gyro_n`, `rv_n`, `reset_n`, `g_valid`, `r_valid`, `wz_src` (0 = encoder, 1 = IMU), `psi_ref`, `e_psi`, `head_on`, `slip_flag`, `r`, `psi_reset_count`, `bias_gz`, `log_seq`, `log_qdrop`, `log_send_err`. Giữ tên cột cũ; đơn vị yaw ghi trong header log.
+**Cột thêm (100 Hz):** `wz_enc`, `gz`, `yaw` (rad), `age_g_ms`, `age_r_ms`, `gyro_n`, `rv_n`, `reset_n`, `g_valid`, `r_valid`, `wz_src` (0 = encoder, 1 = IMU), `psi_ref`, `e_psi`, `head_on`, `slip_flag`, `r`, `psi_reset_count`, `bias_gz`, `log_seq`, `log_qdrop`, `log_send_err`; thêm 28/10 ở cuối dòng: `src_switch_dwz`, `bias_updates` (Codex #11), `slip_eval` (§6, #8 (c)). Giữ tên cột cũ; đơn vị yaw ghi trong header log. Log firmware `ctrl-imu` nay 66 cột.
 
 **Metric (giữ v1):**
 - Khi điều khiển theo gyro, e_wz tính từ chính gz không còn khách quan: SIM/HIL so với giá trị thật của plant; xe thật so với camera (QĐ 7, 8). Log luôn có cả `wz_enc` lẫn `gz`.
@@ -207,6 +210,7 @@ Hệ quả: nạp firmware xe thì phải bật SWA mới chạy motor; nạp b�
 - `controller/imu_fusion.c/.h` (**C thuần**, chạy được trong fwsim): kiểm hợp lệ theo mẫu mới và sự kiện reset, chuyển nguồn, bias khi đứng yên, cờ trượt.
 - `controller/heading.c/.h` (C thuần): vòng giữ hướng, bảng ưu tiên §5.
 - `vel_ctrl_step` nhận thêm mẫu IMU (giá trị, `*_t_us`, `*_n`, `reset_n`) và trả các cột log §8.
+- *(28/10, Codex nhóm B, Liam duyệt)* Cạnh motor tắt → bật: `vel_ctrl_step` reset PID/LADRC (tích phân, ESO, `u_prev`), bước PWM đầu tính từ 0 (#1). Sau lớp cắt vật cản, `main.c` gọi `vel_ctrl_applied(pwm_thực_áp)`: điều kiện đứng yên (§4.4) và bộ đếm metric (S02) tính theo PWM thực áp, không theo lệnh (#12). `g_setpoint` và `g_last_traj_us` chỉ đọc/ghi trong spinlock (#6).
 - `imu/imu.cpp`: đọc chip, gắn thời điểm/bộ đếm (đã có), khởi tạo có hạn (§7), bộ đếm reset (§3).
 - Thư viện: thêm 1 lời gọi tăng `reset_n` ở `BNO08xSH2HAL.cpp:143`. Lõi giả lập `bnoemu_pc` (G1) không biên dịch file này nên không ảnh hưởng.
 - `led_buzzer`: mẫu báo lỗi IMU (§7).
@@ -257,3 +261,19 @@ Mỗi metric so với ngưỡng **cùng thứ nguyên**: `δ_wz` = 1/512 rad/s (
 - ~~THESIS kiểm lại §6.1 và §10~~ **[XONG 27/10]:** O2 lượt 2 (`01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md`); v2.1 đã sửa V1, V3–V6, V9, V11–V14.
 - ~~Chờ Liam: V2, V7, V8, V10~~ **[XONG 27/10, v2.2]:** Liam chốt 27/10 ở phiên THESIS (Liam: "tôi nghiêng theo bạn đấy, chốt 4 V đó cho tôi đi"; `01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md` mục "Kết quả", repo gốc `d580a05`): V2 (a) bơm ở đầu vào gyro; V7 có (X3 đối chiếu A, đo μ_hd mặt trơn); V8 (a) bơm C vào claim C7; V10 (b) δ theo mục tiêu nhiệm vụ, lối thoát độ phân giải.
 - `PWM_X12`, `T_X12` (V6): Liam duyệt khi viết env đo X1–X2.
+
+## 13. Cách hiểu khi code đợt 1 (CODE 28/10, nhánh `ctrl-imu`; chỗ spec chưa nói rõ, chờ Liam/THESIS xem)
+
+1. **Cờ trượt khi không xét được** (gyro không hợp lệ hoặc bánh dưới `ω_min`): cờ đang bật thì tắt sau `T_slip`; timer bật đặt lại. Spec §6 chỉ nói "chỉ xét khi…". **[XONG 28/10: Liam chọn (c) ở phiên CODE, đã đưa vào §6 + cột `slip_eval`.]**
+2. **Vòng hướng chỉ chạy ở MODE_AUTO** (`run_active` = motor enable + AUTO + quỹ đạo còn mới, `main.c`); MANUAL: tắt vòng hướng, wz vẫn lấy từ IMU khi hợp lệ.
+3. **`k_ψ` khởi đầu = 1,0 1/s** (giá trị khởi đầu, chưa tune; spec chỉ ghi "vào miền GA").
+4. **"Lọc chậm" của bias:** mỗi cửa sổ `T_still` đạt, bias tiến về trung bình gz của cửa sổ một bước không quá `b_step` (bộ giới hạn tốc độ).
+5. **σ chưa đo nên đặt 0:** bias không bao giờ cập nhật; `r_th` = 4 × 0,0196 = 0,078 rad/s (chỉ còn phần lượng tử). Đặt σ sau K1 (`imu_fusion_params()`, fwsim `fw_params`).
+6. **`ΔPWM_min` = 20** (2 % PWM_MAX) dùng tạm trong test fwsim; chưa khóa (QĐ 21).
+7. **Đếm `psi_reset`:** cộng 1 ngay lúc có sự kiện reset chip / đổi mode khi đang chạy (ưu tiên 1), và lúc đặt lại `ψ_ref` (ưu tiên 4).
+8. **Reset chip lúc khởi động** (`reset_n` ở lần đọc đầu) là mốc, không phải sự kiện; `T_settle` vẫn tính từ đó.
+9. **Đọc IMU trong `control_task`:** gọi thẳng `imu_get()` (có mutex) mỗi tick; bỏ `imu_task` vì bản sao `volatile` cũ có thể bị đọc lệch khi task ưu tiên cao chen vào giữa lúc sao chép.
+10. **Cột log trùng tên (đợt 2):** spec §8 ghi cột `yaw` (rad) và `gz`, nhưng log cũ đã có `yaw` (độ) và `gz` (gyro thô); giữ cột cũ, thêm `yaw_rad`, `gz_fused` (đã trừ bias); `wz` cũ chính là `wz_enc`.
+11. **Dòng tổng kết `#run_end`** gửi khi motor bật → tắt (một "lượt"); mang `seq` của chính dòng đó và `last_data_seq`.
+12. **`s01_openloop` (v2):** ghi report IMU trong lượt thành dòng `I,…` sau các mẫu (bộ đệm riêng 1024 report, đủ 12 s ở 20 Hz); IMU khởi tạo lỗi thì mọi `RUN` trả `ERR imu <mã>`.
+13. **`T_init` tính từ lúc gọi `imu_init()`**, gồm cả thời gian thư viện reset và mở chip; chưa đo thời gian này trên chip thật: lần nạp đầu đọc `init_ms` trong log (`IMU READY … init_ms=`, `OL READY v2 … init_ms=`) để kiểm 2 s có đủ không.

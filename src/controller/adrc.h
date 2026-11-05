@@ -24,7 +24,7 @@ typedef struct {
     float z2;          // estimate của disturbance tổng hợp
     float beta1;       // observer gain 1 — tune: beta1 = 2*omega_o
     float beta2;       // observer gain 2 — tune: beta2 = omega_o^2
-    float b0;          // control gain ≈ 1/M hoặc 1/J
+    float b0;          // control gain = 1/tau, 1/s (u là lệnh vận tốc thân, adrc.c)
     bool  initialized;
 } eso_t;
 

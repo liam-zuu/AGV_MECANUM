@@ -8,6 +8,10 @@
 
 BNO08x* BNO08xSH2HAL::imu;
 
+// AGV_MECANUM (28/10/2026, spec controller-IMU v2.2 §3): báo ứng dụng mỗi lần chip SH2_RESET.
+// Bản thật ở src/imu/imu.cpp (tăng reset_n); bản weak này chỉ để thư viện link được một mình.
+extern "C" __attribute__((weak)) void imu_note_chip_reset(void) {}
+
 /**
  * @brief Sets the BNO08x driver object to be used with sh2 HAL lib callbacks.
  *
@@ -141,7 +145,10 @@ uint32_t BNO08xSH2HAL::get_time_us(sh2_Hal_t* self)
 void BNO08xSH2HAL::hal_cb(void* cookie, sh2_AsyncEvent_t* pEvent)
 {
     if (pEvent->eventId == SH2_RESET)
+    {
+        imu_note_chip_reset();   // AGV_MECANUM: reset_n cho controller (spec controller-IMU v2.2 §3)
         xEventGroupSetBits(imu->sync_ctx.evt_grp_task, BNO08xPrivateTypes::EVT_GRP_BNO08x_TASK_RESET_OCCURRED);
+    }
 }
 
 /**
