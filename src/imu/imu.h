@@ -120,6 +120,12 @@ void imu_note_lib_drop(int layer);
 // Gọi từ thư viện (sensor_event_cb) cho mỗi report nhận qua SPI: loại, số thứ tự SH-2, epoch, vào hàng đợi hay không.
 void imu_note_rx_report(uint8_t rpt_id, uint8_t seq, uint32_t epoch, int queued);
 
+#ifdef TEST_IMU_TRACE
+// Chỉ cho env imu_trace_* (QĐ 26, G0 v1 §7): kịch bản S3 đổi chu kỳ, S4 xung RST giữa chừng.
+bool imu_trace_set_period(uint32_t period_us);
+bool imu_trace_hard_reset(void);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

@@ -48,6 +48,9 @@
 #ifdef TEST_RELAY
 #include "test_relay.h"
 #endif
+#ifdef TEST_IMU_TRACE
+#include "test_imu_trace.h"
+#endif
 
 void run_tests(void) {
 #ifdef TEST_MOTOR
@@ -82,5 +85,7 @@ void run_tests(void) {
     test_pwm_hold();
 #elif defined(TEST_RELAY)
     test_relay();
+#elif defined(TEST_IMU_TRACE)
+    test_imu_trace();
 #endif
 }
