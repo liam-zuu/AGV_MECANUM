@@ -7,3 +7,6 @@
 # BNO08x library: generated docs and README images are not needed to build
 components/esp32_BNO08x/docs/
 components/esp32_BNO08x/README_images/
+
+# Env s06_load: build id header written by scripts/build_id.py at build time
+src/s06/build_id_gen.h

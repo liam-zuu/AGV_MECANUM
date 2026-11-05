@@ -19,6 +19,8 @@ class BNO08xRptRVGeneric : public BNO08xRpt
                 uint32_t time_between_reports, sh2_SensorConfig_t sensor_cfg = BNO08xPrivateTypes::default_sensor_cfg) override;
         bno08x_quat_t get_quat();
         bno08x_euler_angle_t get_euler(bool in_degrees = true);
+        bno08x_quat_t get_quat(bno08x_rpt_meta_t& meta);                              // AGV_MECANUM
+        bno08x_euler_angle_t get_euler(bno08x_rpt_meta_t& meta, bool in_degrees = true); // AGV_MECANUM
 
     protected:
         BNO08xRptRVGeneric(uint8_t ID, EventBits_t rpt_bit, BNO08xPrivateTypes::bno08x_sync_ctx_t* sync_ctx)

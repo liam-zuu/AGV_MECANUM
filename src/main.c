@@ -18,6 +18,9 @@
 #include "manual_control/manual_control.h"
 #include "controller/vel_ctrl.h"
 #include "tests/test_runner.h"
+#ifdef S06_LOAD
+#include "s06/s06_load.h"
+#endif
 
 static const char *TAG = "MAIN";
 
@@ -544,10 +547,19 @@ static void control_task(void *pv) {
             pwm_fl = 0; pwm_fr = 0; pwm_rl = 0; pwm_rr = 0;
         }
 
+#ifdef S06_LOAD
+        // Env đo S06: PWM theo lịch của lượt thay cho controller (controller vẫn chạy để có
+        // hợp nhất IMU và dòng log như khi chạy thật); mỗi lần ghi compare thành sự kiện P
+        int s06_speed[4];
+        s06_tick(t_now, s06_speed);
+        s06_apply(s06_speed, false);
+        pwm_fl = s06_speed[0]; pwm_fr = s06_speed[1]; pwm_rl = s06_speed[2]; pwm_rr = s06_speed[3];
+#else
         motor_set(MOTOR_FL, pwm_fl);
         motor_set(MOTOR_FR, pwm_fr);
         motor_set(MOTOR_RL, pwm_rl);
         motor_set(MOTOR_RR, pwm_rr);
+#endif
 
         // ── 11. Gửi status về H7 ─────────────────────────────────────────────
         traj_receiver_send_status(actual_vel.vx, actual_vel.vy, actual_vel.wz);
@@ -589,6 +601,9 @@ void app_main(void) {
     ultrasonic_init();
     traj_receiver_init();
     logger_init();
+#ifdef S06_LOAD
+    s06_init();
+#endif
 
     // Init controller
     vel_ctrl_init();

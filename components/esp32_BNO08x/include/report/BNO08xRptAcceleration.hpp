@@ -23,6 +23,7 @@ class BNO08xRptAcceleration : public BNO08xRpt
         bool enable(
                 uint32_t time_between_reports, sh2_SensorConfig_t sensor_cfg = BNO08xPrivateTypes::default_sensor_cfg) override;
         bno08x_accel_t get();
+        bno08x_accel_t get(bno08x_rpt_meta_t& meta); // AGV_MECANUM: + report identity
 
     private:
         void update_data(sh2_SensorValue_t* sensor_val) override;

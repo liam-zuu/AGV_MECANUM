@@ -16,9 +16,19 @@
 #include "BNO08xGlobalTypes.hpp"
 #include "BNO08xCbParamRptID.hpp"
 #include "BNO08xCbParamVoid.hpp"
+#include "sh2.h"
 
 namespace BNO08xPrivateTypes
 {
+    /// @brief AGV_MECANUM (29/10/2026, spec S06 v3.4 V4-2): item of queue_rx_sensor_event. The HAL
+    /// sensor event plus the host reset count read in sensor_event_cb, i.e. in the sh2_service()
+    /// context and in arrival order with hal_cb(SH2_RESET).
+    typedef struct bno08x_rx_evt_t
+    {
+            sh2_SensorEvent_t evt;
+            uint32_t reset_n;
+    } bno08x_rx_evt_t;
+
     using bno08x_cb_list_t = etl::vector<etl::variant<BNO08xCbParamVoid, BNO08xCbParamRptID>,
             CONFIG_ESP32_BNO08X_CB_MAX>; ///< Alias for vector type to contain both cb flavors.
 

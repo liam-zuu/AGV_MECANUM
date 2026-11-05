@@ -33,6 +33,16 @@
 // third-party includes
 #include "sh2_SensorValue.h"
 
+/// @brief AGV_MECANUM (29/10/2026, spec S06 v3.4 V3-8, V4-2): identity of the report whose data a
+/// get(meta) call returns, copied under the same lock as the data.
+typedef struct bno08x_rpt_meta_t
+{
+        uint8_t sequence;    ///< SH-2 8-bit sequence number of the report (sh2_SensorValue_t.sequence)
+        uint32_t epoch;      ///< host reset count when the HAL received the report (sensor_event_cb)
+        uint64_t chip_ts_us; ///< SH-2 timestamp of the report (sh2_SensorValue_t.timestamp)
+        uint32_t n_updates;  ///< reports of this kind stored by data_proc_task since boot
+} bno08x_rpt_meta_t;
+
 /// @brief IMU configuration settings passed into constructor
 typedef struct bno08x_config_t
 {

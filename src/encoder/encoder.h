@@ -26,6 +26,8 @@ typedef enum {
 
 void encoder_init(void);
 int32_t encoder_get_count(enc_id_t id);
+// Đọc count tích lũy của 4 bánh liền nhau, không ghi trạng thái chung (env đo S06, đọc 1 ms) [Y1]
+void encoder_read_all(int32_t out[ENC_COUNT]);
 void encoder_clear(enc_id_t id);
 float encoder_get_rpm(enc_id_t id);    // Gọi định kỳ 10ms
 
