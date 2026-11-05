@@ -59,7 +59,6 @@ typedef struct {
     float          wz_cmd;     // setpoint wz sau vòng giữ hướng
     imu_fusion_out_t imu;      // hợp lệ, nguồn wz, cờ trượt, bias (cột log §8)
     heading_out_t    head;     // vòng giữ hướng (cột log §8)
-<<<<<<< HEAD
     pos_out_t        pos;      // vòng vị trí x, y (pos_ctrl.c; mặc định BẬT)
     bool             still;    // (d) logic dừng đang giữ (PWM 0, bộ điều khiển reset)
     agv_velocity_t   v_cmd;    // lệnh vào vòng trong: vx, vy sau hiệu chỉnh vị trí và cắt vật cản, wz_cmd
