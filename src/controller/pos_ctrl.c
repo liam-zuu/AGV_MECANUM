@@ -44,7 +44,7 @@ static int   sgn(float v) { return (v > 0.0f) - (v < 0.0f); }
 // Một trục PI có anti-windup như M6: tích phân mới chỉ nhận khi đầu ra thử chưa bão hòa
 // hoặc sai số khác dấu với tích phân cũ (sign(e) ~= sign(int) của M6).
 // Hướng dương/âm của trục bị chặn (vật cản, Codex P1): đầu ra về phía đó = 0 và tích phân
-// không lớn thêm (chỉ được xả về 0).
+// không lớn thêm, không đổi dấu (chỉ được xả về 0).
 static float axis(float e, float *integ, float dt, bool block_pos, bool block_neg) {
     float i_old = *integ;
     float i_new = i_old + e * dt;
@@ -52,9 +52,11 @@ static float axis(float e, float *integ, float dt, bool block_pos, bool block_ne
     if (fabsf(u) < P.v_corr_max || sgn(e) != sgn(i_old)) *integ = i_new;
     float out = sat(P.kp * e + P.ki * *integ, P.v_corr_max);
     if ((out > 0.0f && block_pos) || (out < 0.0f && block_neg)) {
-        // Không cho tích phân lớn thêm về phía bị chặn, nhưng vẫn cho xả (|i_new| < |i_old|), để
-        // lúc hết chặn không còn lệnh Ki·∫e cũ (Codex vòng 2 P1)
-        if (fabsf(*integ) > fabsf(i_old)) *integ = i_old;
+        // Tích phân chỉ được ở trong đoạn giữa i_old và 0: không lớn thêm, không đổi dấu, nhưng
+        // vẫn xả được khi sai số ngược dấu (Codex vòng 2 P1, vòng 3 R1). Hết chặn thì phần tích
+        // phân có từ trước lúc chặn vẫn còn (trạng thái trước lúc chặn)
+        float lo = fminf(i_old, 0.0f), hi = fmaxf(i_old, 0.0f);
+        *integ = *integ < lo ? lo : (*integ > hi ? hi : *integ);
         out = 0.0f;
     }
     return out;
