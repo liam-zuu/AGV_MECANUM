@@ -1,4 +1,5 @@
 #include "traj_receiver.h"
+#include "traj_rule.h"
 #include "wifi.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -21,7 +22,8 @@ static uint32_t                 g_n_rx      = 0;   /* packets committed */
 static uint32_t                 g_uart_ok   = 0;   /* UART packets with a good XOR */
 static uint32_t                 g_uart_bad  = 0;   /* UART packets with a bad XOR  */
 static int64_t                  g_uart_last_us = 0;
-static uint32_t                 g_udp_ignored  = 0; /* good UDP packets dropped (TRAJ_UART_ONLY) */
+static uint32_t                 g_udp_drop  = 0;   /* good UDP packets dropped */
+static uint32_t                 g_udp_take  = 0;   /* good UDP packets committed */
 
 /* ── Packet parser — dùng chung cho cả 2 nguồn ───────────────────────── */
 /*
@@ -57,6 +59,30 @@ static void _commit(const traj_setpoint_t *sp, traj_source_t src, int64_t t_rx_u
         g_uart_last_us = t_rx_us;
     }
     taskEXIT_CRITICAL(&g_mux);
+}
+
+/* Good UDP packet: rule and commit under one lock, so a UART packet cannot land
+ * between them. Returns true if it was committed. */
+static bool _commit_udp(const traj_setpoint_t *sp, int64_t t_rx_us)
+{
+    bool take;
+    taskENTER_CRITICAL(&g_mux);
+#ifdef TRAJ_UART_ONLY
+    take = false;
+#else
+    take = traj_udp_allowed(t_rx_us, g_uart_last_us, (int64_t)TRAJ_TIMEOUT_MS * 1000LL);
+#endif
+    if (take) {
+        g_setpoint = *sp;
+        g_last_us  = t_rx_us;
+        g_source   = TRAJ_SRC_WIFI;
+        g_n_rx++;
+        g_udp_take++;
+    } else {
+        g_udp_drop++;
+    }
+    taskEXIT_CRITICAL(&g_mux);
+    return take;
 }
 
 /* ── UART receiver task ───────────────────────────────────────────────── */
@@ -144,17 +170,9 @@ static void _wifi_task(void *pv)
         if (n == TRAJ_PACKET_LEN) {
             traj_setpoint_t sp;
             if (_parse_packet(buf, &sp)) {
-#ifdef TRAJ_UART_ONLY
-                /* HIL bench (env hil_bench): setpoints come only from the H7
-                 * relay; a UDP packet is counted and dropped (build difference
-                 * HIL vs car, Outline QĐ 6) */
-                taskENTER_CRITICAL(&g_mux);
-                g_udp_ignored++;
-                taskEXIT_CRITICAL(&g_mux);
-#else
-                _commit(&sp, TRAJ_SRC_WIFI, esp_timer_get_time());
-                ESP_LOGI(TAG, "WiFi pkt: vx=%.2f vy=%.2f wz=%.2f", sp.vx, sp.vy, sp.wz);  // thêm
-#endif
+                if (_commit_udp(&sp, esp_timer_get_time())) {
+                    ESP_LOGI(TAG, "WiFi pkt: vx=%.2f vy=%.2f wz=%.2f", sp.vx, sp.vy, sp.wz);  // thêm
+                }
             } else {
                 ESP_LOGW(TAG, "WiFi checksum fail");
             }
@@ -199,7 +217,8 @@ void traj_receiver_snapshot(traj_snapshot_t *out)
     out->src         = g_source;
     out->t_rx_us     = g_last_us;
     out->n_rx        = g_n_rx;
-    out->udp_ignored = g_udp_ignored;
+    out->udp_drop    = g_udp_drop;
+    out->udp_take    = g_udp_take;
     taskEXIT_CRITICAL(&g_mux);
 }
 

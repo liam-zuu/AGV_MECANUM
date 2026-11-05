@@ -62,15 +62,17 @@ typedef struct {
     traj_source_t   src;          /* source of that packet (NONE before the first) */
     int64_t         t_rx_us;      /* esp_timer time it was received, 0 = none yet */
     uint32_t        n_rx;         /* packets committed since boot */
-    uint32_t        udp_ignored;  /* good UDP packets dropped (env hil_bench, TRAJ_UART_ONLY) */
+    uint32_t        udp_drop;     /* good UDP packets dropped since boot */
+    uint32_t        udp_take;     /* good UDP packets committed since boot */
 } traj_snapshot_t;
 
 /* ── Public API ───────────────────────────────────────────────────────── */
 
 /* Init UART + WiFi UDP socket, spawn receiver tasks.
  * Call after wifi_init() if WiFi source is needed.
- * Build flag TRAJ_UART_ONLY (env hil_bench): only the UART source is used; good
- * UDP packets are dropped and counted in udp_ignored. */
+ * A good UDP packet is taken only when no UART packet is recent (traj_rule.h).
+ * Build flag TRAJ_UART_ONLY (measurement env s06_load only, not the main binary):
+ * every good UDP packet is dropped. Both cases count in udp_drop / udp_take. */
 void traj_receiver_init(void);
 
 /* Last packet, not timed out by this call (check with traj_receiver_is_fresh). */

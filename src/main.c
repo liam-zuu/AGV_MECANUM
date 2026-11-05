@@ -305,9 +305,24 @@ static void push_log(int64_t t_now, agv_velocity_t vel, const vel_ctrl_out_t *vc
     logger_push(&d);
 }
 
+// Bộ đếm gói UDP lúc bắt đầu lượt: #run_end ghi phần tăng trong lượt (QĐ 6 bậc 1). Trên bàn HIL
+// udp_take > 0 nghĩa là có gói UDP đã vào điều khiển giữa lượt, lượt đó không hợp lệ.
+static uint32_t s_run_udp_drop0, s_run_udp_take0;
+
+static void run_udp_mark(void) {
+    traj_snapshot_t s;
+    traj_receiver_snapshot(&s);
+    s_run_udp_drop0 = s.udp_drop;
+    s_run_udp_take0 = s.udp_take;
+}
+
 // Hết lượt (motor bật → tắt): dòng tổng kết gửi 3 lần; tick mang log_seq của dòng dữ liệu cuối
 static void push_run_end(void) {
-    log_data_t d = { .kind = LOG_KIND_RUN_END, .tick = logger_seq() };
+    traj_snapshot_t s;
+    traj_receiver_snapshot(&s);
+    log_data_t d = { .kind = LOG_KIND_RUN_END, .tick = logger_seq(),
+                     .udp_drop = s.udp_drop - s_run_udp_drop0,
+                     .udp_take = s.udp_take - s_run_udp_take0 };
     for (int i = 0; i < 3; i++) logger_push(&d);
 }
 
@@ -348,8 +363,9 @@ static void control_task(void *pv) {
 
 
         // ── 2. SWA — motor enable/disable ────────────────────────────────────
-        // HIL_BYPASS_MOTOR_ENABLE comes only from env hil_bench (HIL bench has no RC
-        // receiver). Vehicle firmware: SWA enables the motors, and RC loss (ibus
+        // HIL_BYPASS_MOTOR_ENABLE comes only from the measurement env s06_load (Outline
+        // QĐ 6). The main binary, on the car and on the HIL bench (H7 sends iBUS): SWA
+        // enables the motors, and RC loss (ibus
         // valid = false after 20 ms without a byte) disables them (spec
         // controller-IMU v2 §7b, Liam approved 27/10).
         #ifdef HIL_BYPASS_MOTOR_ENABLE
@@ -530,6 +546,7 @@ static void control_task(void *pv) {
             }
             continue;
         }
+        if (!s_motor_prev) run_udp_mark();                    // lượt mới: mốc đếm gói UDP
         s_motor_prev = true;
         s_idle_div   = 0;
         agv_velocity_t actual_vel = vc.actual;

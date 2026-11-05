@@ -120,9 +120,10 @@ void logger_task(void *pv) {
 
         if (data.kind == LOG_KIND_RUN_END) {
             // Dòng tổng kết cuối lượt (bắt đầu bằng '#': PC tách khỏi CSV)
-            int n = snprintf(buf, sizeof(buf), "#run_end,seq=%lu,last_data_seq=%lu,log_qdrop=%lu,log_send_err=%lu\n",
+            int n = snprintf(buf, sizeof(buf), "#run_end,seq=%lu,last_data_seq=%lu,log_qdrop=%lu,log_send_err=%lu,udp_drop=%lu,udp_take=%lu\n",
                              (unsigned long)data.log_seq, (unsigned long)data.tick,
-                             (unsigned long)data.log_qdrop, (unsigned long)s_log_send_err);
+                             (unsigned long)data.log_qdrop, (unsigned long)s_log_send_err,
+                             (unsigned long)data.udp_drop, (unsigned long)data.udp_take);
             if (sendto(sock, buf, n, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0)
                 s_log_send_err++;
             continue;
