@@ -7,7 +7,9 @@
 // ─────────────────────────────────────────
 // Config — TODO: đổi IP laptop
 // ─────────────────────────────────────────
+#ifndef LOGGER_PC_IP                // env đo đặt qua build flag (s06_load: IP của Pi, Q2 29/10)
 #define LOGGER_PC_IP        "192.168.10.114"
+#endif
 #define LOGGER_UDP_PORT     5005
 #define LOGGER_QUEUE_SIZE   32      // buffer 32 frame ở 100Hz = 320ms headroom
 
