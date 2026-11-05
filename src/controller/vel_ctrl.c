@@ -33,6 +33,7 @@ void vel_ctrl_init(void) {
     g_still_p = (still_params_t)STILL_PARAMS_DEFAULT;
     g_still = false;
     g_still_since = -1;
+    wheel_slip_init(NULL);
     g_mode = CTRL_MODE;
     g_mode_event = false;
     g_pwm_zero = true;
@@ -79,6 +80,11 @@ vel_ctrl_out_t vel_ctrl_step(const vel_ctrl_in_t *in) {
     };
     for (int i = 0; i < 4; i++) fi.enc_count[i] = in->enc_count[i];
     imu_fusion_step(&fi, &o.imu);
+
+    // ── 8b'. Cờ trượt không đều giữa các bánh (wheel_slip.c, chỉ ghi log) ──
+    wheel_slip_in_t wi = { .now_us = in->now_us };
+    for (int i = 0; i < 4; i++) wi.count[i] = in->enc_count[i];
+    wheel_slip_step(&wi, &o.wslip);
 
     // ── 8c. Vòng giữ hướng (heading.c) ───────────────────────────────────
     heading_in_t hi = {

@@ -310,6 +310,11 @@ static void push_log(int64_t t_now, agv_velocity_t vel, const vel_ctrl_out_t *vc
         .still       = vc->still,
         .run_active  = vc->run_active,
         .pos_reset_n = vc->pos.reset_n,
+        .ws_res      = vc->wslip.res,
+        .ws_th       = vc->wslip.th,
+        .ws_flag     = vc->wslip.flag,
+        .ws_on_count = vc->wslip.on_count,
+        .ws_eval     = vc->wslip.eval,
     };
     logger_push(&d);
 }

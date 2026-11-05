@@ -81,6 +81,11 @@ typedef struct {
     // Thêm 05/11 (Codex P6): pose chỉ tích phân khi run_active; mỗi lần bắt đầu chạy pos_reset_n tăng
     uint8_t  run_active;                   // motor bật + AUTO + quỹ đạo còn mới
     uint32_t pos_reset_n;                  // số lần đặt lại tư thế từ lúc khởi động
+    // Thêm 04/11 (wheel_slip.c, trượt không đều giữa các bánh): cuối dòng, SAU các cột pos_*
+    // (gộp int/post-g2 05/11; 66 + 14 + 5 = 85 cột, như tools/agv_logger.py COLUMNS)
+    float    ws_res, ws_th;    // [count] phần dư, ngưỡng trong cửa sổ
+    uint8_t  ws_flag, ws_eval;
+    uint32_t ws_on_count;
 } log_data_t;
 
 #define LOG_KIND_DATA    0

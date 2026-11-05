@@ -106,7 +106,8 @@ void logger_task(void *pv) {
         "slip_flag,slip_on_count,r,bias_gz,"
         "src_switch_dwz,bias_updates,slip_eval,"
         "pos_on,pos_x,pos_y,pos_th,pos_x_ref,pos_y_ref,pos_th_ref,pos_corr_vx,pos_corr_vy,"
-        "pos_th_src,pos_in_pos,still,run_active,pos_reset_n\n";
+        "pos_th_src,pos_in_pos,still,run_active,pos_reset_n,"
+        "ws_res,ws_th,ws_flag,ws_on_count,ws_eval\n";
     sendto(sock, header, strlen(header), 0,
            (struct sockaddr *)&dest_addr, sizeof(dest_addr));
 
@@ -151,7 +152,8 @@ void logger_task(void *pv) {
             "%u,%lu,%.4f,%.5f,"
             "%.4f,%lu,%u,"
             "%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,"
-            "%u,%u,%u,%u,%lu\n",
+            "%u,%u,%u,%u,%lu,"
+            "%.0f,%.1f,%u,%lu,%u\n",
             data.timestamp_us,
             data.fl_count, data.fr_count, data.rl_count, data.rr_count,
             data.fl_rpm,   data.fr_rpm,   data.rl_rpm,   data.rr_rpm,
@@ -178,7 +180,9 @@ void logger_task(void *pv) {
             (unsigned)data.pos_on, data.pos_x, data.pos_y, data.pos_th,
             data.pos_x_ref, data.pos_y_ref, data.pos_th_ref, data.pos_corr_vx, data.pos_corr_vy,
             (unsigned)data.pos_th_src, (unsigned)data.pos_in_pos, (unsigned)data.still,
-            (unsigned)data.run_active, (unsigned long)data.pos_reset_n
+            (unsigned)data.run_active, (unsigned long)data.pos_reset_n,
+            data.ws_res, data.ws_th, (unsigned)data.ws_flag, (unsigned long)data.ws_on_count,
+            (unsigned)data.ws_eval
         );
 
         if (len > 0 && len < (int)sizeof(buf)) {
