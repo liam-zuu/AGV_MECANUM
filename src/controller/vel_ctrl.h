@@ -6,11 +6,13 @@
 #include "adrc.h"
 #include "imu_fusion.h"
 #include "heading.h"
+#include "pos_ctrl.h"
 #include <stdint.h>
 
 // ─────────────────────────────────────────
 // Vòng vận tốc thân — bước 8–10 của control_task (main.c):
-//   encoder rpm → FK → hợp nhất IMU (wz) + vòng giữ hướng → bộ điều khiển (vx, vy, wz) → IK → PWM
+//   encoder rpm → FK → hợp nhất IMU (wz) + vòng giữ hướng → vòng vị trí x, y (pos_ctrl.c,
+//   mặc định BẬT, 04/11) → bộ điều khiển (vx, vy, wz) → IK → PWM
 // Tách khỏi main.c (21/10/2026) để mô phỏng trên PC (hil-framework fwsim/)
 // biên dịch và chạy đúng mã này. File không dùng API ESP-IDF/FreeRTOS.
 //
@@ -42,7 +44,11 @@ typedef struct {
     bool              motor_on;       // driver enable (SWA)
     bool              run_active;     // motor_on và đang chạy theo quỹ đạo VALID (MODE_AUTO)
     bool              wheels_lifted;  // bài chạy kê bánh: tắt ước lượng bias
+    // Hướng bị chặn do vật cản (main.c s_*_blocked, hệ thân; Codex P1, 05/11): lệnh sau hiệu
+    // chỉnh vị trí không đi về hướng đó
+    bool              block_fwd, block_bwd, block_left, block_right;
 } vel_ctrl_in_t;
+#define VEL_CTRL_HAS_BLOCK 1   // có block_*, v_cmd, run_active (05/11): fwsim fw_sim.c dò macro này
 
 typedef struct {
     agv_velocity_t actual;     // vận tốc thân tính từ encoder (FK)
@@ -51,6 +57,10 @@ typedef struct {
     float          wz_cmd;     // setpoint wz sau vòng giữ hướng
     imu_fusion_out_t imu;      // hợp lệ, nguồn wz, cờ trượt, bias (cột log §8)
     heading_out_t    head;     // vòng giữ hướng (cột log §8)
+    pos_out_t        pos;      // vòng vị trí x, y (pos_ctrl.c; mặc định BẬT)
+    bool             still;    // (d) logic dừng đang giữ (PWM 0, bộ điều khiển reset)
+    agv_velocity_t   v_cmd;    // lệnh vào vòng trong: vx, vy sau hiệu chỉnh vị trí và cắt vật cản, wz_cmd
+    bool             run_active;  // bản sao đầu vào, để log (Codex P6)
 
     // Bộ đếm cộng dồn cho metric (spec S02): log mất mẫu vẫn tính đúng,
     // khoảng trống trong tick cho biết số mẫu mất. Reset ở init / set_mode.
@@ -59,7 +69,18 @@ typedef struct {
     uint32_t       sat_ticks[4];  // số tick có |pwm| ≥ PWM_MAX
 } vel_ctrl_out_t;
 
+// (d) Logic dừng (Liam 04/11 "đồng ý làm a+d"; mặc định BẬT, Liam 04/11 "làm cách 1 ban khuyến nghị đi"):
+// v_still lớn hơn đỉnh tốc độ lúc săn trên fwsim (≤ 0,045 m/s, O1_FEAS run02–run05_diag);
+// t_still để không giữ giữa lúc đổi chiều. Ngưỡng [ĐỀ XUẤT], chưa kiểm trên xe.
+typedef struct {
+    bool    on;
+    float   v_still;      // [m/s] [ĐỀ XUẤT 0,05]; wz dùng v_still/(LX+LY)
+    int64_t t_still_us;   // [µs]  [ĐỀ XUẤT 500 000]
+} still_params_t;
+#define STILL_PARAMS_DEFAULT { .on = true, .v_still = 0.05f, .t_still_us = 500000 }
+
 void               vel_ctrl_init(void);              // khởi tạo PID, ADRC, imu_fusion, heading; chế độ = CTRL_MODE
+still_params_t    *vel_ctrl_still_params(void);
 void               vel_ctrl_set_mode(int mode);      // CTRL_PID / CTRL_ADRC; reset trạng thái bộ điều khiển, đặt lại vòng hướng
 int                vel_ctrl_mode(void);
 pid_controller_t  *vel_ctrl_pid(void);

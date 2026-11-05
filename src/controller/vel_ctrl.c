@@ -1,5 +1,10 @@
 #include "vel_ctrl.h"
 #include "motor.h"      // PWM_MAX
+#include <math.h>
+
+static still_params_t    g_still_p = STILL_PARAMS_DEFAULT;
+static bool              g_still;           // (d) logic dừng đang giữ
+static int64_t           g_still_since = -1;
 
 static pid_controller_t  g_pid;
 static adrc_controller_t g_adrc;
@@ -24,6 +29,10 @@ void vel_ctrl_init(void) {
     adrc_init(&g_adrc);
     imu_fusion_init(NULL);
     heading_init(NULL);
+    pos_init(NULL);
+    g_still_p = (still_params_t)STILL_PARAMS_DEFAULT;
+    g_still = false;
+    g_still_since = -1;
     g_mode = CTRL_MODE;
     g_mode_event = false;
     g_pwm_zero = true;
@@ -39,6 +48,7 @@ void vel_ctrl_set_mode(int mode) {
     counters_reset();
 }
 
+still_params_t    *vel_ctrl_still_params(void) { return &g_still_p; }
 int                vel_ctrl_mode(void) { return g_mode; }
 pid_controller_t  *vel_ctrl_pid(void)  { return &g_pid; }
 adrc_controller_t *vel_ctrl_adrc(void) { return &g_adrc; }
@@ -83,6 +93,46 @@ vel_ctrl_out_t vel_ctrl_step(const vel_ctrl_in_t *in) {
     heading_step(&hi, &o.head);
     o.wz_cmd = o.head.wz_cmd;
 
+    // ── 8c'. (d) Logic dừng (Liam 04/11 "đồng ý làm a+d"; mặc định BẬT) ───
+    // Lệnh = 0 và |vx|, |vy| < v_still, |wz| < v_still/(LX+LY) liên tục t_still → giữ: PWM 0,
+    // reset PID/LADRC mỗi tick, vòng vị trí không hiệu chỉnh. Thoát khi lệnh khác 0 hoặc motor tắt;
+    // đang giữ thì xe có trôi nhanh hơn ngưỡng cũng vẫn giữ (lệnh vẫn = 0).
+    {
+        bool sp0 = vel.vx == 0.0f && vel.vy == 0.0f && vel.wz == 0.0f;
+        float vs = g_still_p.v_still, ws = vs / (LX + LY);
+        bool slow = fabsf(o.actual.vx) < vs && fabsf(o.actual.vy) < vs && fabsf(o.actual.wz) < ws;
+        if (!g_still_p.on || !in->motor_on || !sp0) {
+            g_still = false;
+            g_still_since = -1;
+        } else if (!g_still) {
+            if (!slow) g_still_since = -1;
+            else if (g_still_since < 0) g_still_since = in->now_us;
+            if (slow && in->now_us - g_still_since >= g_still_p.t_still_us) g_still = true;
+        }
+        o.still = g_still;
+    }
+
+    // ── 8d. Vòng vị trí x, y (pos_ctrl.c, O1 PA3; mặc định BẬT) ───────────
+    pos_in_t pi = {
+        .vx_ref = vel.vx, .vy_ref = vel.vy, .wz_ref = vel.wz,
+        .vx_enc = o.actual.vx, .vy_enc = o.actual.vy, .wz_enc = o.actual.wz,
+        .psi_imu = o.head.psi_imu, .head_on = o.head.on,
+        .dt = dt, .run_active = in->run_active, .hold = g_still,
+        .psi0_n = o.head.psi0_n,
+        .block_fwd = in->block_fwd, .block_bwd = in->block_bwd,
+        .block_left = in->block_left, .block_right = in->block_right,
+    };
+    pos_step(&pi, &o.pos);
+    vel.vx += o.pos.corr_vx;
+    vel.vy += o.pos.corr_vy;
+    // Cắt vật cản lần nữa sau hiệu chỉnh (Codex P1, 05/11): interlock ở main.c chỉ thấy lệnh gốc
+    if (in->block_fwd   && vel.vx > 0.0f) vel.vx = 0.0f;
+    if (in->block_bwd   && vel.vx < 0.0f) vel.vx = 0.0f;
+    if (in->block_left  && vel.vy > 0.0f) vel.vy = 0.0f;
+    if (in->block_right && vel.vy < 0.0f) vel.vy = 0.0f;
+    o.v_cmd = (agv_velocity_t){ .vx = vel.vx, .vy = vel.vy, .wz = o.wz_cmd };
+    o.run_active = in->run_active;
+
     // Bộ đếm metric hiện tại; khi motor bật, vel_ctrl_applied() cập nhật sau khi biết PWM thực áp
     o.tick = g_tick;
     for (int i = 0; i < 4; i++) { o.dpwm_sum[i] = g_dpwm_sum[i]; o.sat_ticks[i] = g_sat_ticks[i]; }
@@ -113,6 +163,18 @@ vel_ctrl_out_t vel_ctrl_step(const vel_ctrl_in_t *in) {
         o.ctrl_out.vy = vel.vy + pid_update_vy(&g_pid, vel.vy, o.actual.vy, dt);
         o.ctrl_out.wz = o.wz_cmd + pid_update_wz(&g_pid, o.wz_cmd, wz_meas, dt);
     }
+    // Đầu ra vòng trong không đi vào hướng bị chặn (Codex vòng 2 P1): tích phân PID hay ESO còn
+    // lại có thể đẩy xe về phía vật cản khi lệnh đã về 0; hard cutoff ở main.c chỉ xét intent
+    // và v_cmd. Kẹp từng trục (không cắt cả 4 PWM) để vẫn đi ngang được khi trước bị chặn.
+    // ESO nhận u đã kẹp, như khi bão hòa.
+    if ((in->block_fwd && o.ctrl_out.vx > 0.0f) || (in->block_bwd && o.ctrl_out.vx < 0.0f)) {
+        o.ctrl_out.vx = 0.0f;
+        if (g_mode == CTRL_ADRC) g_adrc.vx.u_prev = 0.0f;
+    }
+    if ((in->block_left && o.ctrl_out.vy > 0.0f) || (in->block_right && o.ctrl_out.vy < 0.0f)) {
+        o.ctrl_out.vy = 0.0f;
+        if (g_mode == CTRL_ADRC) g_adrc.vy.u_prev = 0.0f;
+    }
 
     // ── 10. Inverse kinematics → PWM ─────────────────────────────────────
     wheel_velocity_t wheels = kinematics_inverse(o.ctrl_out);
@@ -120,6 +182,15 @@ vel_ctrl_out_t vel_ctrl_step(const vel_ctrl_in_t *in) {
     o.pwm[1] = kinematics_radps_to_pwm(wheels.fr);
     o.pwm[2] = kinematics_radps_to_pwm(wheels.rl);
     o.pwm[3] = kinematics_radps_to_pwm(wheels.rr);
+
+    // (d) Logic dừng đang giữ: PWM 0, bỏ trạng thái bộ điều khiển (tích phân PID, ESO) để không
+    // tích lũy trong lúc đứng; lần chạy sau bắt đầu sạch.
+    if (g_still) {
+        pid_reset(&g_pid);
+        adrc_reset(&g_adrc);
+        o.ctrl_out = (agv_velocity_t){0};
+        for (int i = 0; i < 4; i++) o.pwm[i] = 0;
+    }
 
     return o;
 }

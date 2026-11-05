@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "lwip/sockets.h"
+#include <math.h>
 #include <string.h>
 
 static const char *TAG = "TRAJ";
@@ -19,8 +20,8 @@ static traj_setpoint_t          g_setpoint  = {0};
 static int64_t                  g_last_us   = 0;   /* esp_timer time the last valid packet was received (µs) */
 static traj_source_t            g_source    = TRAJ_SRC_NONE;
 static uint32_t                 g_n_rx      = 0;   /* packets committed */
-static uint32_t                 g_uart_ok   = 0;   /* UART packets with a good XOR */
-static uint32_t                 g_uart_bad  = 0;   /* UART packets with a bad XOR  */
+static uint32_t                 g_uart_ok   = 0;   /* UART packets accepted by _parse_packet */
+static uint32_t                 g_uart_bad  = 0;   /* UART packets dropped: bad XOR, NaN/Inf or out of range (Codex round 3 R4) */
 static int64_t                  g_uart_last_us = 0;
 static uint32_t                 g_udp_drop  = 0;   /* good UDP packets dropped */
 static uint32_t                 g_udp_take  = 0;   /* good UDP packets committed */
@@ -39,9 +40,16 @@ static bool _parse_packet(const uint8_t *buf, traj_setpoint_t *out)
     for (int i = 0; i < TRAJ_PACKET_LEN - 1; i++) chk ^= buf[i];
     if (chk != buf[TRAJ_PACKET_LEN - 1]) return false;
 
-    memcpy(&out->vx, &buf[1], 4);
-    memcpy(&out->vy, &buf[5], 4);
-    memcpy(&out->wz, &buf[9], 4);
+    traj_setpoint_t sp;
+    memcpy(&sp.vx, &buf[1], 4);
+    memcpy(&sp.vy, &buf[5], 4);
+    memcpy(&sp.wz, &buf[9], 4);
+    /* NaN/±Inf đúng checksum: bỏ gói (Codex P18, 05/11; ±Inf làm wrap_pi lặp mãi trong control_task) */
+    if (!isfinite(sp.vx) || !isfinite(sp.vy) || !isfinite(sp.wz)) return false;
+    /* Ngoài miền: bỏ gói (Codex vòng 2 P18). Miền rộng hơn giới hạn vật lý của xe
+     * (bánh 34,56 rad/s × r 0,0485 m ≈ 1,68 m/s; quay ≈ 7 rad/s), chỉ chặn gói hỏng */
+    if (fabsf(sp.vx) > TRAJ_V_MAX || fabsf(sp.vy) > TRAJ_V_MAX || fabsf(sp.wz) > TRAJ_W_MAX) return false;
+    *out = sp;
     return true;
 }
 
@@ -121,8 +129,8 @@ static void _uart_task(void *pv)
                     taskENTER_CRITICAL(&g_mux);
                     g_uart_bad++;
                     taskEXIT_CRITICAL(&g_mux);
-                    /* Checksum fail — resync */
-                    ESP_LOGW(TAG, "UART checksum fail, resyncing");
+                    /* Bad packet (XOR, NaN/Inf or out of range) — resync */
+                    ESP_LOGW(TAG, "UART bad packet (checksum/range), resyncing");
                 }
                 pkt_idx = 0;
                 syncing = true;
@@ -174,7 +182,7 @@ static void _wifi_task(void *pv)
                     ESP_LOGI(TAG, "WiFi pkt: vx=%.2f vy=%.2f wz=%.2f", sp.vx, sp.vy, sp.wz);  // thêm
                 }
             } else {
-                ESP_LOGW(TAG, "WiFi checksum fail");
+                ESP_LOGW(TAG, "WiFi bad packet (checksum/range)");
             }
         }
         /* n < 0 = timeout hoặc error — loop lại */

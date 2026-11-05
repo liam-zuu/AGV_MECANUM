@@ -41,6 +41,7 @@ typedef struct {
     float    e_psi;            // wrap(ψ_ref − ψ_imu) khi đang chạy và yaw hợp lệ, không thì 0
     uint32_t psi_reset_count;  // số lần đặt lại ψ0 hoặc ψ_ref (§5 ưu tiên 1, 4)
     uint32_t toggle_count;     // số lần bật/tắt vòng hướng
+    uint32_t psi0_n;           // số lần đặt ψ0 (hệ ψ_imu đổi: bắt đầu chạy, reset chip, đổi mode)
 } heading_out_t;
 
 void              heading_init(const heading_params_t *p);   // NULL = mặc định

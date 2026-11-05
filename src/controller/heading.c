@@ -1,4 +1,5 @@
 #include "heading.h"
+#include <math.h>
 #include <string.h>
 
 #define PI_F 3.14159265f
@@ -14,9 +15,14 @@ static struct {
     float    psi_imu;
     uint32_t psi_reset_count;
     uint32_t toggle_count;
+    uint32_t psi0_n;      // số lần đặt ψ0 (hệ ψ_imu đổi); pos_ctrl.c đặt lại θ_off theo số này
 } H;
 
 static float wrap_pi(float a) {
+    if (!isfinite(a)) return 0.0f;   // ±Inf không thoát được vòng while (Codex P18, 05/11)
+    // Số hữu hạn lớn: float32 quanh 1e10 có a − 2π == a, vòng while không thoát (Codex vòng 2 P18).
+    // Chỉ dùng remainderf khi |a| lớn để giá trị thường giữ nguyên từng bit như trước.
+    if (fabsf(a) > 4.0f * PI_F) a = remainderf(a, 2.0f * PI_F);
     while (a >  PI_F) a -= 2.0f * PI_F;
     while (a < -PI_F) a += 2.0f * PI_F;
     return a;
@@ -36,6 +42,7 @@ static void set_psi0(float yaw) {
     H.psi_ref   = 0.0f;
     H.need_psi0 = false;
     H.on        = true;
+    H.psi0_n++;
 }
 
 void heading_step(const heading_in_t *in, heading_out_t *out) {
@@ -93,4 +100,5 @@ void heading_step(const heading_in_t *in, heading_out_t *out) {
     out->e_psi           = e;
     out->psi_reset_count = H.psi_reset_count;
     out->toggle_count    = H.toggle_count;
+    out->psi0_n          = H.psi0_n;
 }

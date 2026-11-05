@@ -301,6 +301,15 @@ static void push_log(int64_t t_now, agv_velocity_t vel, const vel_ctrl_out_t *vc
         .src_switch_dwz = m->src_switch_dwz,
         .bias_updates   = m->bias_updates,
         .slip_eval      = m->slip_eval,
+        .pos_on      = vc->pos.on,
+        .pos_x       = vc->pos.x,      .pos_y     = vc->pos.y,     .pos_th     = vc->pos.th,
+        .pos_x_ref   = vc->pos.x_ref,  .pos_y_ref = vc->pos.y_ref, .pos_th_ref = vc->pos.th_ref,
+        .pos_corr_vx = vc->pos.corr_vx, .pos_corr_vy = vc->pos.corr_vy,
+        .pos_th_src  = vc->pos.th_src,
+        .pos_in_pos  = vc->pos.in_pos,
+        .still       = vc->still,
+        .run_active  = vc->run_active,
+        .pos_reset_n = vc->pos.reset_n,
     };
     logger_push(&d);
 }
@@ -529,6 +538,9 @@ static void control_task(void *pv) {
 #else
             .wheels_lifted = false,
 #endif
+            // Cờ chặn vào vel_ctrl để cắt cả phần hiệu chỉnh vị trí (Codex P1, 05/11)
+            .block_fwd   = s_front_blocked, .block_bwd   = s_back_blocked,
+            .block_left  = s_left_blocked,  .block_right = s_right_blocked,
         };
         vel_ctrl_out_t vc = vel_ctrl_step(&vin);
 
@@ -556,11 +568,12 @@ static void control_task(void *pv) {
         int pwm_rr = vc.pwm[3];
 
         // ── 10b. Hard cutoff PWM ──────────────────────────────────────────────
+        // Xét cả lệnh gốc (intent) lẫn lệnh vào vòng trong sau hiệu chỉnh vị trí (Codex P1, 05/11)
         if (g_obstacle_enabled &&
-           ((s_front_blocked && intent_fwd)   ||
-            (s_back_blocked  && intent_bwd)   ||
-            (s_left_blocked  && intent_left)  ||
-            (s_right_blocked && intent_right))) {
+           ((s_front_blocked && (intent_fwd   || vc.v_cmd.vx > 0.0f)) ||
+            (s_back_blocked  && (intent_bwd   || vc.v_cmd.vx < 0.0f)) ||
+            (s_left_blocked  && (intent_left  || vc.v_cmd.vy > 0.0f)) ||
+            (s_right_blocked && (intent_right || vc.v_cmd.vy < 0.0f)))) {
             pwm_fl = 0; pwm_fr = 0; pwm_rl = 0; pwm_rr = 0;
         }
 
