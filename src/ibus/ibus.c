@@ -6,14 +6,20 @@
 static const char *TAG = "IBUS";
 
 // ─── Globals ──────────────────────────────────────────────────────────────────
-SemaphoreHandle_t g_ibus_mutex        = NULL;
+// Shared between ibus_task (core 0) and control_task / manual_control (core 1).
+// A spinlock, not a mutex: the old xSemaphoreTake(m, pdMS_TO_TICKS(5)) was 0 ticks
+// at CONFIG_FREERTOS_HZ=100, so ibus_get() returned false (= RC lost, motor off for
+// one 10 ms control cycle) whenever it ran while ibus_task held the mutex
+// (suspected cause of the 10 ms Motor disabled/enabled pairs, CLOSED_LOOP
+// 2026-11-07_run01 and 2026-11-08_run01). The critical sections only copy a
+// 22-byte struct.
+portMUX_TYPE      g_ibus_mux          = portMUX_INITIALIZER_UNLOCKED;
 ibus_data_t       g_ibus_data         = {0};
 int               g_ibus_failsafe_count = 0;
+static uint32_t   s_gap_count         = 0;   // 20 ms without a byte right after a valid frame
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 void ibus_init(void) {
-    g_ibus_mutex = xSemaphoreCreateMutex();
-    configASSERT(g_ibus_mutex);
 
     uart_config_t uart_cfg = {
         .baud_rate  = IBUS_BAUD,
@@ -86,12 +92,21 @@ void ibus_task(void *pvParam) {
 
         if (n <= 0) {
             // Không có byte nào trong 20ms → receiver mất tín hiệu
-            if (xSemaphoreTake(g_ibus_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-                g_ibus_data.valid = false;
-                g_ibus_failsafe_count++;
-                xSemaphoreGive(g_ibus_mutex);
+            bool was_valid;
+            int  fs_count;
+            taskENTER_CRITICAL(&g_ibus_mux);
+            was_valid         = g_ibus_data.valid;
+            g_ibus_data.valid = false;
+            fs_count          = ++g_ibus_failsafe_count;
+            taskEXIT_CRITICAL(&g_ibus_mux);
+            if (was_valid) {
+                // Diagnostic: one line per valid -> no-byte transition, so a later
+                // Motor disabled/enabled pair can be matched to it (or not)
+                s_gap_count++;
+                ESP_LOGW(TAG, "no byte for 20 ms after a valid frame (gap #%lu)",
+                         (unsigned long)s_gap_count);
             }
-            if (g_ibus_failsafe_count >= IBUS_FAILSAFE_FRAMES) {
+            if (fs_count >= IBUS_FAILSAFE_FRAMES) {
                 ESP_LOGW(TAG, "FAILSAFE: %d frames invalid — no signal", g_ibus_failsafe_count);
                 // Motor stop on RC loss is done in main.c: valid = false -> has_rc false
                 // -> swa_on false -> motor_enable(false) (spec controller-IMU v2 §7b).
@@ -129,16 +144,15 @@ void ibus_task(void *pvParam) {
                     ibus_data_t tmp = {0};
                     bool ok = _parse_packet(buf, &tmp);
 
-                    if (xSemaphoreTake(g_ibus_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-                        if (ok) {
-                            g_ibus_data           = tmp;
-                            g_ibus_failsafe_count = 0;
-                        } else {
-                            g_ibus_data.valid = false;
-                            g_ibus_failsafe_count++;
-                        }
-                        xSemaphoreGive(g_ibus_mutex);
+                    taskENTER_CRITICAL(&g_ibus_mux);
+                    if (ok) {
+                        g_ibus_data           = tmp;
+                        g_ibus_failsafe_count = 0;
+                    } else {
+                        g_ibus_data.valid = false;
+                        g_ibus_failsafe_count++;
                     }
+                    taskEXIT_CRITICAL(&g_ibus_mux);
                     state = WAIT_H0;
                 }
                 break;
@@ -148,9 +162,9 @@ void ibus_task(void *pvParam) {
 
 // ─── Thread-safe getter ───────────────────────────────────────────────────────
 bool ibus_get(ibus_data_t *out) {
-    if (xSemaphoreTake(g_ibus_mutex, pdMS_TO_TICKS(5)) != pdTRUE) return false;
+    taskENTER_CRITICAL(&g_ibus_mux);   // never fails: no "RC lost" from lock contention
     *out = g_ibus_data;
-    xSemaphoreGive(g_ibus_mutex);
+    taskEXIT_CRITICAL(&g_ibus_mux);
     return out->valid;
 }
 

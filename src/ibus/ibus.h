@@ -30,13 +30,13 @@
 // Failsafe: số frame invalid liên tiếp trước khi gọi emergency stop
 #define IBUS_FAILSAFE_FRAMES    10
 
-// ─── Shared data (access qua ibus_get / mutex) ────────────────────────────────
+// ─── Shared data (access qua ibus_get / g_ibus_mux) ────────────────────────────────
 typedef struct {
     uint16_t channel[IBUS_NUM_CHANNELS];
     bool     valid;
 } ibus_data_t;
 
-extern SemaphoreHandle_t g_ibus_mutex;
+extern portMUX_TYPE      g_ibus_mux;      // spinlock (cores 0 and 1), was a mutex
 extern ibus_data_t       g_ibus_data;
 extern int               g_ibus_failsafe_count;  // tăng mỗi frame invalid, reset về 0 khi valid
 
@@ -47,7 +47,7 @@ void ibus_init(void);
 void ibus_task(void *pvParam);
 
 // Thread-safe copy g_ibus_data ra ngoài
-// Trả về false nếu mutex timeout hoặc data invalid
+// Trả về false chỉ khi data invalid (spinlock, không có timeout)
 bool ibus_get(ibus_data_t *out);
 
 // Map channel ch về [-1000, +1000], áp deadband
