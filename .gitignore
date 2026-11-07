@@ -10,3 +10,6 @@ components/esp32_BNO08x/README_images/
 
 # Env s06_load: build id header written by scripts/build_id.py at build time
 src/s06/build_id_gen.h
+
+# WiFi SSID/password, local only (src/wifi/wifi_secrets.h.example is the template)
+src/wifi/wifi_secrets.h
