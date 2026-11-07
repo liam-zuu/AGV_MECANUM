@@ -48,6 +48,9 @@
 #ifdef TEST_RELAY
 #include "test_relay.h"
 #endif
+#ifdef TEST_MU_FLOOR
+#include "test_mu_floor.h"
+#endif
 
 void run_tests(void) {
 #ifdef TEST_MOTOR
@@ -82,5 +85,7 @@ void run_tests(void) {
     test_pwm_hold();
 #elif defined(TEST_RELAY)
     test_relay();
+#elif defined(TEST_MU_FLOOR)
+    test_mu_floor();
 #endif
 }
