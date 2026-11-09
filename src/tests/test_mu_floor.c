@@ -343,6 +343,7 @@ void test_mu_floor(void) {
     while (1) {
         udp_service();
         if (next_line(ln)) handle(ln);
-        else vTaskDelay(pdMS_TO_TICKS(5));
+        else vTaskDelay(1);       /* one tick = 10 ms (CONFIG_FREERTOS_HZ 100; pdMS_TO_TICKS(5) is 0 and
+                                     starved the idle task: task watchdog at 5 s, bench 09/11) */
     }
 }
