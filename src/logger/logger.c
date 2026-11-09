@@ -1,4 +1,5 @@
 #include "logger.h"
+#include "../fw_id_gen.h"      // FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV: scripts/build_id.py sinh lúc build
 #include "wifi/wifi.h"
 #include "esp_log.h"
 #include "lwip/sockets.h"
@@ -48,6 +49,14 @@ void logger_push(const log_data_t *data) {
     d.log_seq   = ++s_log_seq;
     d.log_qdrop = s_log_qdrop;
     if (xQueueSend(log_queue, &d, 0) != pdTRUE) s_log_qdrop++;
+}
+
+// Dòng #fw (LOG_KIND_FW): không lấy log_seq, không đếm vào log_qdrop, để số thứ tự dòng dữ liệu và
+// phép kiểm mất log phía PC (tools/agv_logger.py) không đổi; hàng đợi đầy thì dòng này mất, không đếm
+void logger_push_fw(void) {
+    if (log_queue == NULL) return;
+    log_data_t d = { .kind = LOG_KIND_FW };
+    (void)xQueueSend(log_queue, &d, 0);
 }
 
 uint32_t logger_seq(void)      { return s_log_seq; }
@@ -124,6 +133,13 @@ void logger_task(void *pv) {
         if (xQueueReceive(log_queue, &data, portMAX_DELAY) != pdTRUE) continue;
         if (sock < 0) continue;
 
+        if (data.kind == LOG_KIND_FW) {
+            // Nhận dạng firmware (Liam 09/11): '#' nên PC tách khỏi CSV, vào file events
+            int n = snprintf(buf, sizeof(buf), "#fw,sha=%s,dirty=%d,env=%s\n", FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV);
+            if (sendto(sock, buf, n, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0)
+                s_log_send_err++;
+            continue;
+        }
         if (data.kind == LOG_KIND_RUN_END) {
             // Dòng tổng kết cuối lượt (bắt đầu bằng '#': PC tách khỏi CSV)
             int n = snprintf(buf, sizeof(buf), "#run_end,seq=%lu,last_data_seq=%lu,log_qdrop=%lu,log_send_err=%lu,udp_drop=%lu,udp_take=%lu\n",

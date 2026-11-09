@@ -18,6 +18,7 @@
 #include "manual_control/manual_control.h"
 #include "controller/vel_ctrl.h"
 #include "tests/test_runner.h"
+#include "fw_id_gen.h"         // FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV: scripts/build_id.py sinh lúc build (mọi env)
 #ifdef S06_LOAD
 #include "s06/s06_load.h"
 #endif
@@ -328,6 +329,8 @@ static void run_udp_mark(void) {
     traj_receiver_snapshot(&s);
     s_run_udp_drop0 = s.udp_drop;
     s_run_udp_take0 = s.udp_take;
+    // Nhận dạng firmware vào log UDP của lượt (Liam 09/11): 3 bản như #run_end, phòng mất gói
+    for (int i = 0; i < 3; i++) logger_push_fw();
 }
 
 // Hết lượt (motor bật → tắt): dòng tổng kết gửi 3 lần; tick mang log_seq của dòng dữ liệu cuối
@@ -643,6 +646,8 @@ void app_main(void) {
     // Init controller
     vel_ctrl_init();
     ESP_LOGI(TAG, "Controller: %s", CTRL_MODE == CTRL_PID ? "PID" : "ADRC");
+    // Nhận dạng firmware (Liam 09/11, phiên CODE): meta.yaml ghi theo dòng này, không theo HEAD trên PC
+    ESP_LOGI(TAG, "#fw sha=%s dirty=%d env=%s", FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV);
 
     motor_enable(false);
     g_us_mutex = xSemaphoreCreateMutex();
