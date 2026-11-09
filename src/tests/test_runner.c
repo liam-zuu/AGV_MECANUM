@@ -51,6 +51,9 @@
 #ifdef TEST_MU_FLOOR
 #include "test_mu_floor.h"
 #endif
+#ifdef TEST_IMU_TRACE
+#include "test_imu_trace.h"
+#endif
 
 void run_tests(void) {
 #ifdef TEST_MOTOR
@@ -87,5 +90,7 @@ void run_tests(void) {
     test_relay();
 #elif defined(TEST_MU_FLOOR)
     test_mu_floor();
+#elif defined(TEST_IMU_TRACE)
+    test_imu_trace();
 #endif
 }

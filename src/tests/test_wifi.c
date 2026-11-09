@@ -9,16 +9,18 @@
 
 static const char *TAG = "TEST_WIFI";
 
-// TODO: điền IP laptop và SSID/password trong wifi.c
-#define TEST_UDP_PORT   5005
-#define TEST_PC_IP      "192.168.10.114"  // TODO: đổi theo IP laptop
+// SSID/password: src/wifi/wifi_secrets.h (local, not in git); IP: the Pi, like logger.h
+#include "logger/logger.h"
+#define TEST_UDP_PORT   LOGGER_UDP_PORT
+#define TEST_PC_IP      LOGGER_PC_IP
 
 void test_wifi(void) {
     ESP_LOGI(TAG, "WiFi test start");
-    wifi_init();
+    wifi_init();   // non-blocking since fix/wifi-log: wait here for the connection
 
+    for (int i = 0; i < 150 && !wifi_is_connected(); i++) vTaskDelay(pdMS_TO_TICKS(100));
     if (!wifi_is_connected()) {
-        ESP_LOGE(TAG, "WiFi connect failed — check SSID/password");
+        ESP_LOGE(TAG, "WiFi not connected after 15 s — check SSID/password (2.4 GHz)");
         return;
     }
     ESP_LOGI(TAG, "WiFi connected OK");

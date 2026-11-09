@@ -18,6 +18,10 @@
 #include "manual_control/manual_control.h"
 #include "controller/vel_ctrl.h"
 #include "tests/test_runner.h"
+#include "fw_id_gen.h"         // FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV: scripts/build_id.py sinh lúc build (mọi env)
+#ifdef S06_LOAD
+#include "s06/s06_load.h"
+#endif
 
 static const char *TAG = "MAIN";
 
@@ -49,32 +53,38 @@ typedef enum {
 static volatile system_mode_t  g_mode            = MODE_WAITING;
 static volatile bool           g_emergency_stop  = false;
 static volatile bool           g_motor_enabled   = false;
-static volatile int64_t        g_last_traj_us    = 0;
+// g_setpoint (3 trường) và g_last_traj_us (64 bit) ghi ở lõi 0, đọc ở lõi 1: chỉ đọc/ghi
+// trong g_traj_mux để không đọc rách (Codex ctrl-imu #6, Liam duyệt 28/10)
+static portMUX_TYPE             g_traj_mux        = portMUX_INITIALIZER_UNLOCKED;
+static int64_t                  g_last_traj_us    = 0;
 
-static volatile traj_setpoint_t g_setpoint        = {0};
+static traj_setpoint_t          g_setpoint        = {0};
 static volatile float            g_enc_rpm[4]     = {0};
 static volatile int32_t          g_enc_count[4]   = {0};
-static volatile imu_data_t       g_imu_data       = {0};
 static volatile us_data_t        g_us_data        = {0};
 static SemaphoreHandle_t         g_us_mutex;
 
 static volatile bool g_obstacle_enabled = true;
+static volatile bool g_imu_fail         = false;   // imu_init() lỗi: motor tắt, LED/còi báo (§7)
 
 // ─────────────────────────────────────────
 // CORE 0 - traj_task (priority 3)
 // ─────────────────────────────────────────
 static void traj_task(void *pv) {
     while (1) {
-        traj_setpoint_t sp  = traj_receiver_get();
-        traj_source_t   src = traj_receiver_source();
-        /* traj_receiver_get() trả về {0} khi timeout.
-         * Dùng g_last_us trong traj_receiver để quyết định fresh/stale
-         * thay vì check source. */
-        bool fresh = (traj_receiver_source() != TRAJ_SRC_NONE);
+        /* Một bản chụp của gói cuối (setpoint, nguồn, thời điểm nhận). g_last_traj_us lấy
+         * thời điểm NHẬN gói, không phải lúc task này thấy nó: control_task tính hết hạn
+         * TRAJ_TIMEOUT_US từ gói thật cuối cùng, hết timeout kép ~400 ms (DUT nhóm 1,
+         * Liam duyệt Q5a 29/10) */
+        traj_snapshot_t s;
+        traj_receiver_snapshot(&s);
+        bool fresh = traj_receiver_is_fresh(&s, esp_timer_get_time());
         if (fresh) {
-            ESP_LOGI(TAG, "traj fresh src=%d vx=%.2f", src, sp.vx);  // thêm
-            g_setpoint     = sp;
-            g_last_traj_us = esp_timer_get_time();
+            ESP_LOGI(TAG, "traj fresh src=%d vx=%.2f", s.src, s.sp.vx);  // thêm
+            taskENTER_CRITICAL(&g_traj_mux);
+            g_setpoint     = s.sp;
+            g_last_traj_us = s.t_rx_us;
+            taskEXIT_CRITICAL(&g_traj_mux);
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -135,6 +145,23 @@ static void led_task(void *pv) {
     while (1) {
         system_mode_t mode = g_mode;
         bool emg = g_emergency_stop;
+
+        if (g_imu_fail) {
+            // IMU khởi tạo lỗi (Liam 27–28/10): LED xanh dương NHÁY + còi 1 dài 5 ngắn, lặp mỗi 3 s
+            // [ĐỀ XUẤT: dài 600 ms, nghỉ 200 ms, ngắn 120/120 ms]. Khác AUTO-UART (xanh dương sáng liên tục).
+            led_set_color(COLOR_BLUE);
+            buzzer_beep(2700, 600);
+            led_set_color(COLOR_OFF);
+            vTaskDelay(pdMS_TO_TICKS(200));
+            for (int i = 0; i < 5; i++) {
+                led_set_color(COLOR_BLUE);
+                buzzer_beep(2700, 120);
+                led_set_color(COLOR_OFF);
+                vTaskDelay(pdMS_TO_TICKS(120));
+            }
+            vTaskDelay(pdMS_TO_TICKS(1000));   // 600 + 200 + 5 × 240 + 1000 = 3000 ms
+            continue;
+        }
 
         if (emg) {
             led_set_color(COLOR_RED);
@@ -207,25 +234,126 @@ static void encoder_task(void *pv) {
 }
 
 // ─────────────────────────────────────────
-// CORE 1 - imu_task (priority 6)
+// Log 100 Hz (motor bật) / 10 Hz (motor tắt): cột cũ + cột IMU, mất log (spec controller–IMU v2.2 §8)
 // ─────────────────────────────────────────
-static void imu_task(void *pv) {
-    imu_data_t data;
-    while (1) {
-        if (imu_get(&data)) {
-            g_imu_data = data;
-        }
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
+static void push_log(int64_t t_now, agv_velocity_t vel, const vel_ctrl_out_t *vc,
+                     const int pwm[4], const imu_data_t *imu, bool motor_on) {
+    const imu_fusion_out_t *m = &vc->imu;
+    const heading_out_t    *h = &vc->head;
+    log_data_t d = {
+        .timestamp_us = t_now,
+        .fl_count = g_enc_count[ENC_FL],
+        .fr_count = g_enc_count[ENC_FR],
+        .rl_count = g_enc_count[ENC_RL],
+        .rr_count = g_enc_count[ENC_RR],
+        .fl_rpm   = g_enc_rpm[ENC_FL],
+        .fr_rpm   = g_enc_rpm[ENC_FR],
+        .rl_rpm   = g_enc_rpm[ENC_RL],
+        .rr_rpm   = g_enc_rpm[ENC_RR],
+        .vx       = vc->actual.vx,
+        .vy       = vc->actual.vy,
+        .wz       = vc->actual.wz,
+        .sp_vx    = vel.vx,
+        .sp_vy    = vel.vy,
+        .sp_wz    = vel.wz,
+        .pwm_fl   = pwm[0],
+        .pwm_fr   = pwm[1],
+        .pwm_rl   = pwm[2],
+        .pwm_rr   = pwm[3],
+        .ax       = imu->accel_x,
+        .ay       = imu->accel_y,
+        .az       = imu->accel_z,
+        .gx       = imu->gyro_x,
+        .gy       = imu->gyro_y,
+        .gz       = imu->gyro_z,
+        .yaw      = imu->yaw,
+        .pitch    = imu->pitch,
+        .roll     = imu->roll,
+        .tick     = vc->tick,
+        .dpwm_fl  = vc->dpwm_sum[0], .dpwm_fr = vc->dpwm_sum[1],
+        .dpwm_rl  = vc->dpwm_sum[2], .dpwm_rr = vc->dpwm_sum[3],
+        .sat_fl   = vc->sat_ticks[0], .sat_fr = vc->sat_ticks[1],
+        .sat_rl   = vc->sat_ticks[2], .sat_rr = vc->sat_ticks[3],
+
+        .kind     = LOG_KIND_DATA,
+        .motor_on = motor_on,
+        .imu_init = (int8_t)imu_init_status(),
+        .wz_meas  = m->wz_meas,
+        .wz_cmd   = vc->wz_cmd,
+        .gz_fused = m->gz,
+        .yaw_rad  = m->yaw,
+        .age_g_ms = m->age_g_ms,
+        .age_r_ms = m->age_r_ms,
+        .gyro_n   = imu->gyro_n,
+        .rv_n     = imu->rv_n,
+        .reset_n  = imu->reset_n,
+        .g_valid  = m->g_valid,
+        .r_valid  = m->r_valid,
+        .wz_src   = (uint8_t)m->wz_src,
+        .src_switch_count = m->src_switch_count,
+        .psi_ref  = h->psi_ref,
+        .e_psi    = h->e_psi,
+        .head_on  = h->on,
+        .psi_reset_count = h->psi_reset_count,
+        .slip_flag = m->slip_flag,
+        .slip_on_count = m->slip_on_count,
+        .r        = m->r,
+        .bias_gz  = m->bias_gz,
+        .src_switch_dwz = m->src_switch_dwz,
+        .bias_updates   = m->bias_updates,
+        .slip_eval      = m->slip_eval,
+        .pos_on      = vc->pos.on,
+        .pos_x       = vc->pos.x,      .pos_y     = vc->pos.y,     .pos_th     = vc->pos.th,
+        .pos_x_ref   = vc->pos.x_ref,  .pos_y_ref = vc->pos.y_ref, .pos_th_ref = vc->pos.th_ref,
+        .pos_corr_vx = vc->pos.corr_vx, .pos_corr_vy = vc->pos.corr_vy,
+        .pos_th_src  = vc->pos.th_src,
+        .pos_in_pos  = vc->pos.in_pos,
+        .still       = vc->still,
+        .run_active  = vc->run_active,
+        .pos_reset_n = vc->pos.reset_n,
+        .ws_res      = vc->wslip.res,
+        .ws_th       = vc->wslip.th,
+        .ws_flag     = vc->wslip.flag,
+        .ws_on_count = vc->wslip.on_count,
+        .ws_eval     = vc->wslip.eval,
+    };
+    logger_push(&d);
+}
+
+// Bộ đếm gói UDP lúc bắt đầu lượt: #run_end ghi phần tăng trong lượt (QĐ 6 bậc 1). Trên bàn HIL
+// udp_take > 0 nghĩa là có gói UDP đã vào điều khiển giữa lượt, lượt đó không hợp lệ.
+static uint32_t s_run_udp_drop0, s_run_udp_take0;
+
+static void run_udp_mark(void) {
+    traj_snapshot_t s;
+    traj_receiver_snapshot(&s);
+    s_run_udp_drop0 = s.udp_drop;
+    s_run_udp_take0 = s.udp_take;
+    // Nhận dạng firmware vào log UDP của lượt (Liam 09/11): 3 bản như #run_end, phòng mất gói
+    for (int i = 0; i < 3; i++) logger_push_fw();
+}
+
+// Hết lượt (motor bật → tắt): dòng tổng kết gửi 3 lần; tick mang log_seq của dòng dữ liệu cuối
+static void push_run_end(void) {
+    traj_snapshot_t s;
+    traj_receiver_snapshot(&s);
+    log_data_t d = { .kind = LOG_KIND_RUN_END, .tick = logger_seq(),
+                     .udp_drop = s.udp_drop - s_run_udp_drop0,
+                     .udp_take = s.udp_take - s_run_udp_take0 };
+    for (int i = 0; i < 3; i++) logger_push(&d);
 }
 
 // ─────────────────────────────────────────
 // CORE 1 - control_task (priority 5)
 // ─────────────────────────────────────────
+// IMU: control_task tự copy imu_get() mỗi tick (có mutex), thay cho imu_task cũ
+// (bản sao volatile cũ có thể bị đọc lệch giữa chừng khi imu_task ưu tiên cao hơn chen vào).
 static void control_task(void *pv) {
     const float dt = 0.01f;
     int64_t t_prev = esp_timer_get_time();
     bool    swa_prev = false;
+    static imu_data_t s_imu;
+    bool    have_imu = false;
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
@@ -252,8 +380,9 @@ static void control_task(void *pv) {
 
 
         // ── 2. SWA — motor enable/disable ────────────────────────────────────
-        // HIL_BYPASS_MOTOR_ENABLE comes only from env hil_bench (HIL bench has no RC
-        // receiver). Vehicle firmware: SWA enables the motors, and RC loss (ibus
+        // HIL_BYPASS_MOTOR_ENABLE comes only from the measurement env s06_load (Outline
+        // QĐ 6). The main binary, on the car and on the HIL bench (H7 sends iBUS): SWA
+        // enables the motors, and RC loss (ibus
         // valid = false after 20 ms without a byte) disables them (spec
         // controller-IMU v2 §7b, Liam approved 27/10).
         #ifdef HIL_BYPASS_MOTOR_ENABLE
@@ -261,6 +390,8 @@ static void control_task(void *pv) {
         #else
                 bool swa_on = has_rc && (rc.channel[CH_SWA] > 1500);
         #endif
+                // IMU khởi tạo lỗi: không bao giờ bật motor (spec controller–IMU v2.2 §7)
+                if (g_imu_fail) swa_on = false;
                 if (swa_on != swa_prev) {
                     g_emergency_stop = false;
                     swa_prev         = swa_on;
@@ -335,8 +466,14 @@ static void control_task(void *pv) {
         // ── 5. Xác định mode ─────────────────────────────────────────────────
         static int s_rc_lost_counter = 0;
         bool swc_manual  = has_rc && (rc.channel[CH_SWC] > 1700);
-        bool traj_fresh  = (g_last_traj_us > 0) &&
-                           ((t_now - g_last_traj_us) < TRAJ_TIMEOUT_US);
+        traj_setpoint_t sp_snap;
+        int64_t         traj_us;
+        taskENTER_CRITICAL(&g_traj_mux);         // một bản chụp nhất quán (Codex ctrl-imu #6)
+        sp_snap = g_setpoint;
+        traj_us = g_last_traj_us;
+        taskEXIT_CRITICAL(&g_traj_mux);
+        bool traj_fresh  = (traj_us > 0) &&
+                           ((t_now - traj_us) < TRAJ_TIMEOUT_US);
 
         if (swc_manual) {
             g_mode = MODE_MANUAL;
@@ -352,12 +489,8 @@ static void control_task(void *pv) {
             }
         }
 
-        // ── 6. Motor off ──────────────────────────────────────────────────────
-        if (!g_motor_enabled) {
-            motor_stop_all();
-            traj_receiver_send_status(0, 0, 0);
-            continue;
-        }
+        // ── 6. Motor off: xử lý sau bước 8–10 (vel_ctrl_step chạy mỗi tick để
+        //       theo dõi hợp lệ IMU, bias khi đứng yên; spec controller–IMU v2.2 §9)
 
         // ── 7. Setpoint theo mode ─────────────────────────────────────────────
         agv_velocity_t vel = {0};
@@ -373,9 +506,9 @@ static void control_task(void *pv) {
             }
             break;
         case MODE_AUTO:
-            vel.vx = g_setpoint.vx;
-            vel.vy = g_setpoint.vy;
-            vel.wz = g_setpoint.wz;
+            vel.vx = sp_snap.vx;
+            vel.vy = sp_snap.vy;
+            vel.wz = sp_snap.wz;
             break;
         case MODE_WAITING:
         default:
@@ -394,10 +527,48 @@ static void control_task(void *pv) {
         if (s_left_blocked  && vel.vy > 0.0f) vel.vy = 0.0f;
         if (s_right_blocked && vel.vy < 0.0f) vel.vy = 0.0f;
 
-        // ── 8–10. FK → controller → IK → PWM (controller/vel_ctrl.c) ─────────
-        float enc_rpm[4] = { g_enc_rpm[ENC_FL], g_enc_rpm[ENC_FR],
-                             g_enc_rpm[ENC_RL], g_enc_rpm[ENC_RR] };
-        vel_ctrl_out_t vc = vel_ctrl_step(vel, enc_rpm, dt_actual);
+        // ── 8–10. FK → hợp nhất IMU + giữ hướng → controller → IK → PWM ─────
+        //         (controller/vel_ctrl.c, imu_fusion.c, heading.c)
+        if (imu_get(&s_imu)) have_imu = true;
+        vel_ctrl_in_t vin = {
+            .sp         = vel,
+            .enc_rpm    = { g_enc_rpm[ENC_FL], g_enc_rpm[ENC_FR],
+                            g_enc_rpm[ENC_RL], g_enc_rpm[ENC_RR] },
+            .enc_count  = { g_enc_count[ENC_FL], g_enc_count[ENC_FR],
+                            g_enc_count[ENC_RL], g_enc_count[ENC_RR] },
+            .imu        = have_imu ? &s_imu : NULL,
+            .now_us     = t_now,
+            .dt         = dt_actual,
+            .motor_on   = g_motor_enabled,
+            .run_active = g_motor_enabled && g_mode == MODE_AUTO && traj_fresh,
+#ifdef RUN_WHEELS_LIFTED
+            .wheels_lifted = true,
+#else
+            .wheels_lifted = false,
+#endif
+            // Cờ chặn vào vel_ctrl để cắt cả phần hiệu chỉnh vị trí (Codex P1, 05/11)
+            .block_fwd   = s_front_blocked, .block_bwd   = s_back_blocked,
+            .block_left  = s_left_blocked,  .block_right = s_right_blocked,
+        };
+        vel_ctrl_out_t vc = vel_ctrl_step(&vin);
+
+        static bool s_motor_prev = false;
+        static int  s_idle_div   = 0;
+        if (!g_motor_enabled) {
+            motor_stop_all();
+            traj_receiver_send_status(0, 0, 0);
+            if (s_motor_prev) push_run_end();                 // hết lượt: tổng kết 3 lần (§8)
+            s_motor_prev = false;
+            if (++s_idle_div >= 10) {                         // dòng nhịp thưa 10 Hz khi motor tắt
+                s_idle_div = 0;
+                const int pwm0[4] = {0, 0, 0, 0};
+                push_log(t_now, vel, &vc, pwm0, &s_imu, false);
+            }
+            continue;
+        }
+        if (!s_motor_prev) run_udp_mark();                    // lượt mới: mốc đếm gói UDP
+        s_motor_prev = true;
+        s_idle_div   = 0;
         agv_velocity_t actual_vel = vc.actual;
         int pwm_fl = vc.pwm[0];
         int pwm_fr = vc.pwm[1];
@@ -405,59 +576,36 @@ static void control_task(void *pv) {
         int pwm_rr = vc.pwm[3];
 
         // ── 10b. Hard cutoff PWM ──────────────────────────────────────────────
+        // Xét cả lệnh gốc (intent) lẫn lệnh vào vòng trong sau hiệu chỉnh vị trí (Codex P1, 05/11)
         if (g_obstacle_enabled &&
-           ((s_front_blocked && intent_fwd)   ||
-            (s_back_blocked  && intent_bwd)   ||
-            (s_left_blocked  && intent_left)  ||
-            (s_right_blocked && intent_right))) {
+           ((s_front_blocked && (intent_fwd   || vc.v_cmd.vx > 0.0f)) ||
+            (s_back_blocked  && (intent_bwd   || vc.v_cmd.vx < 0.0f)) ||
+            (s_left_blocked  && (intent_left  || vc.v_cmd.vy > 0.0f)) ||
+            (s_right_blocked && (intent_right || vc.v_cmd.vy < 0.0f)))) {
             pwm_fl = 0; pwm_fr = 0; pwm_rl = 0; pwm_rr = 0;
         }
 
+#ifdef S06_LOAD
+        // Env đo S06: PWM theo lịch của lượt thay cho controller (controller vẫn chạy để có
+        // hợp nhất IMU và dòng log như khi chạy thật); mỗi lần ghi compare thành sự kiện P
+        int s06_speed[4];
+        s06_tick(t_now, s06_speed);
+        s06_apply(s06_speed, false);
+        pwm_fl = s06_speed[0]; pwm_fr = s06_speed[1]; pwm_rl = s06_speed[2]; pwm_rr = s06_speed[3];
+#else
         motor_set(MOTOR_FL, pwm_fl);
         motor_set(MOTOR_FR, pwm_fr);
         motor_set(MOTOR_RL, pwm_rl);
         motor_set(MOTOR_RR, pwm_rr);
+#endif
 
         // ── 11. Gửi status về H7 ─────────────────────────────────────────────
         traj_receiver_send_status(actual_vel.vx, actual_vel.vy, actual_vel.wz);
 
         // ── 12. Push log ──────────────────────────────────────────────────────
-        log_data_t logdata = {
-            .timestamp_us = t_now,
-            .fl_count = g_enc_count[ENC_FL],
-            .fr_count = g_enc_count[ENC_FR],
-            .rl_count = g_enc_count[ENC_RL],
-            .rr_count = g_enc_count[ENC_RR],
-            .fl_rpm   = g_enc_rpm[ENC_FL],
-            .fr_rpm   = g_enc_rpm[ENC_FR],
-            .rl_rpm   = g_enc_rpm[ENC_RL],
-            .rr_rpm   = g_enc_rpm[ENC_RR],
-            .vx       = actual_vel.vx,
-            .vy       = actual_vel.vy,
-            .wz       = actual_vel.wz,
-            .sp_vx    = vel.vx,
-            .sp_vy    = vel.vy,
-            .sp_wz    = vel.wz,
-            .pwm_fl   = pwm_fl,
-            .pwm_fr   = pwm_fr,
-            .pwm_rl   = pwm_rl,
-            .pwm_rr   = pwm_rr,
-            .ax       = g_imu_data.accel_x,
-            .ay       = g_imu_data.accel_y,
-            .az       = g_imu_data.accel_z,
-            .gx       = g_imu_data.gyro_x,
-            .gy       = g_imu_data.gyro_y,
-            .gz       = g_imu_data.gyro_z,
-            .yaw      = g_imu_data.yaw,
-            .pitch    = g_imu_data.pitch,
-            .roll     = g_imu_data.roll,
-            .tick     = vc.tick,
-            .dpwm_fl  = vc.dpwm_sum[0], .dpwm_fr = vc.dpwm_sum[1],
-            .dpwm_rl  = vc.dpwm_sum[2], .dpwm_rr = vc.dpwm_sum[3],
-            .sat_fl   = vc.sat_ticks[0], .sat_fr = vc.sat_ticks[1],
-            .sat_rl   = vc.sat_ticks[2], .sat_rr = vc.sat_ticks[3],
-        };
-        logger_push(&logdata);
+        const int pwm_out[4] = { pwm_fl, pwm_fr, pwm_rl, pwm_rr };
+        vel_ctrl_applied(pwm_out, &vc);   // đứng yên + bộ đếm theo PWM thực áp (Codex ctrl-imu #12)
+        push_log(t_now, vel, &vc, pwm_out, &s_imu, true);
     }
 }
 
@@ -473,7 +621,7 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "AGV starting...");
 
-    // LED + buzzer trước imu_init (GPIO1 share RST BNO085)
+    // LED + buzzer trước imu_init để báo được lỗi IMU (RST BNO085 là GPIO1, buzzer GPIO17: không dùng chung)
     led_buzzer_init();
     led_set_color(COLOR_YELLOW);
     buzzer_beep(2700, 100);
@@ -483,24 +631,36 @@ void app_main(void) {
     motor_init();
     encoder_init();
     ibus_init();
-    imu_init();
+    int imu_rc = imu_init();   // chặn tối đa IMU_INIT_TIMEOUT_MS
+    if (imu_rc != IMU_INIT_OK) {
+        g_imu_fail = true;     // motor không bao giờ bật; led_task báo; log mang imu_init (§7, §8)
+        ESP_LOGE(TAG, "IMU_INIT_FAIL %d (%s): motors stay disabled", imu_rc, imu_init_err_str(imu_rc));
+    }
     ultrasonic_init();
     traj_receiver_init();
     logger_init();
+#ifdef S06_LOAD
+    s06_init();
+#endif
 
     // Init controller
     vel_ctrl_init();
     ESP_LOGI(TAG, "Controller: %s", CTRL_MODE == CTRL_PID ? "PID" : "ADRC");
+    // Nhận dạng firmware (Liam 09/11, phiên CODE): meta.yaml ghi theo dòng này, không theo HEAD trên PC
+    ESP_LOGI(TAG, "#fw sha=%s dirty=%d env=%s", FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV);
 
     motor_enable(false);
     g_us_mutex = xSemaphoreCreateMutex();
 
-    buzzer_beep(2700, 100);
-    vTaskDelay(pdMS_TO_TICKS(100));
-    buzzer_beep(2700, 100);
-    led_set_color(COLOR_WHITE);
-
-    ESP_LOGI(TAG, "Boot done — WAITING");
+    if (!g_imu_fail) {
+        buzzer_beep(2700, 100);
+        vTaskDelay(pdMS_TO_TICKS(100));
+        buzzer_beep(2700, 100);
+        led_set_color(COLOR_WHITE);
+        ESP_LOGI(TAG, "Boot done — WAITING");
+    } else {
+        ESP_LOGE(TAG, "Boot done — IMU FAIL STATE");
+    }
 
     xTaskCreatePinnedToCore(ibus_task,       "ibus",       4096, NULL, 4, NULL, 0);
     xTaskCreatePinnedToCore(traj_task,       "traj",       4096, NULL, 3, NULL, 0);
@@ -508,7 +668,6 @@ void app_main(void) {
     xTaskCreatePinnedToCore(ultrasonic_task, "ultrasonic", 4096, NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(logger_task,     "logger",     4096, NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(encoder_task,    "encoder",    4096, NULL, 6, NULL, 1);
-    xTaskCreatePinnedToCore(imu_task,        "imu",        4096, NULL, 6, NULL, 1);
     xTaskCreatePinnedToCore(control_task,    "control",    4096, NULL, 5, NULL, 1);
 
     ESP_LOGI(TAG, "All tasks started");

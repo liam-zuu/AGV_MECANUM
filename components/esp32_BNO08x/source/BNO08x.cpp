@@ -5,8 +5,14 @@
 
 #include "BNO08x.hpp"
 #include "BNO08xPrivateTypes.hpp"
+#include "BNO08xTrace.h" // empty unless -DBNO_TRACE (thesis trace envs, 28/10/2026)
+#ifdef BNO_TRACE
+#include <esp_timer.h>
+#endif
 
 using namespace BNO08xPrivateTypes;
+
+extern "C" void imu_note_lib_drop(int layer);   // AGV_MECANUM: weak default in BNO08xSH2HAL.cpp
 
 /**
  * @brief BNO08x imu constructor.
@@ -23,7 +29,7 @@ BNO08x::BNO08x(bno08x_config_t imu_config)
     , sh2_HAL_service_task_hdl(NULL)
     , cb_task_hdl(NULL)
     , sem_kill_tasks(NULL)
-    , queue_rx_sensor_event(xQueueCreate(10, sizeof(sh2_SensorEvent_t)))
+    , queue_rx_sensor_event(xQueueCreate(10, sizeof(bno08x_rx_evt_t)))   // AGV_MECANUM: + reset_n
     , queue_cb_report_id(xQueueCreate(CONFIG_ESP32_BNO08X_CB_QUEUE_SZ, sizeof(uint8_t)))
     , imu_config(imu_config)
 {
@@ -139,7 +145,7 @@ void BNO08x::data_proc_task()
 {
     EventBits_t evt_grp_bno08x_task_bits = 0U;
     BaseType_t queue_rx_success = pdFALSE;
-    sh2_SensorEvent_t sensor_evt;
+    bno08x_rx_evt_t rx_evt;
     sh2_SensorValue_t sensor_val;
 
     do
@@ -147,11 +153,11 @@ void BNO08x::data_proc_task()
 
         if (queue_rx_success == pdTRUE)
         {
-            if (sh2_decodeSensorEvent(&sensor_val, &sensor_evt) != SH2_ERR)
-                handle_sensor_report(&sensor_val);
+            if (sh2_decodeSensorEvent(&sensor_val, &rx_evt.evt) != SH2_ERR)
+                handle_sensor_report(&sensor_val, rx_evt.reset_n);
         }
 
-        queue_rx_success = xQueueReceive(queue_rx_sensor_event, &sensor_evt, portMAX_DELAY);
+        queue_rx_success = xQueueReceive(queue_rx_sensor_event, &rx_evt, portMAX_DELAY);
         evt_grp_bno08x_task_bits = xEventGroupGetBits(sync_ctx.evt_grp_task);
 
     } while (evt_grp_bno08x_task_bits & EVT_GRP_BNO08x_TASKS_RUNNING);
@@ -331,7 +337,7 @@ void BNO08x::unlock_user_data()
  *
  * @return void, nothing to return
  */
-void BNO08x::handle_sensor_report(sh2_SensorValue_t* sensor_val)
+void BNO08x::handle_sensor_report(sh2_SensorValue_t* sensor_val, uint32_t reset_n)
 {
     uint8_t rpt_ID = sensor_val->sensorId;
 
@@ -354,11 +360,13 @@ void BNO08x::handle_sensor_report(sh2_SensorValue_t* sensor_val)
     if (rpt->rpt_bit & xEventGroupGetBits(sync_ctx.evt_grp_rpt_en))
     {
         // update respective report with new data
+        rpt->rx_epoch = reset_n;   // AGV_MECANUM: stored with the data by stamp_meta() (V4-2)
         rpt->update_data(sensor_val);
 
         if (sync_ctx.cb_list.size() != 0)
             if (xQueueSend(queue_cb_report_id, &rpt_ID, 0) != pdTRUE)
             {
+                imu_note_lib_drop(2);   // AGV_MECANUM: callback for this report never runs (Y13)
                 // clang-format off
                 #ifdef CONFIG_ESP32_BNO08x_LOG_STATEMENTS
                 ESP_LOGE(TAG, "Callback queue full, callback execution for report missed.");
@@ -994,7 +1002,7 @@ esp_err_t BNO08x::deinit_tasks()
     static const constexpr TickType_t TASK_DELETE_TIMEOUT_MS = HOST_INT_TIMEOUT_DEFAULT_MS;
     uint8_t kill_count = 0;
     uint8_t init_count = 0;
-    sh2_SensorEvent_t empty_event;
+    bno08x_rx_evt_t empty_event;
     uint8_t empty_ID = 0;
 
     // disable interrupts before beginning so we can ensure SPI transaction doesn't attempt to run
@@ -1846,6 +1854,9 @@ esp_err_t BNO08x::wait_for_reset()
  */
 void BNO08x::toggle_reset()
 {
+#ifdef BNO_TRACE
+    bno_trace_rec(BT_RST, 0, 0, 0, nullptr, 0, (uint32_t) esp_timer_get_time());
+#endif
     gpio_intr_disable(imu_config.io_int); // disable interrupts before reset
 
     gpio_set_level(imu_config.io_cs, 1);
@@ -2100,6 +2111,10 @@ void IRAM_ATTR BNO08x::hint_handler(void* arg)
     BaseType_t xHighPriorityTaskWoken = pdFALSE;
     BNO08x* imu = (BNO08x*) arg; // cast argument received by gpio_isr_handler_add ("this" pointer
                                  // to imu object created by constructor call)
+
+#ifdef BNO_TRACE
+    bno_trace_rec(BT_INT, 0, 0, 0, nullptr, 0, (uint32_t) esp_timer_get_time());
+#endif
 
     // notify any tasks/function calls waiting for HINT assertion
     xEventGroupSetBitsFromISR(imu->sync_ctx.evt_grp_task, EVT_GRP_BNO08x_TASK_HINT_ASSRT_BIT, &xHighPriorityTaskWoken);

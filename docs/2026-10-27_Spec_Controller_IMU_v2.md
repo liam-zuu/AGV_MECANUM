@@ -4,6 +4,8 @@
 
 *v2.1 (27/10 khuya): sửa theo bản kiểm O2 lượt 2 của THESIS (`01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md`, ký hiệu V#): V1, V3–V6, V9, V11–V14 CODE tự sửa; ~~V2, V7, V8, V10 chờ Liam~~ **v2.2: V2, V7, V8, V10 Liam chốt 27/10 ở phiên THESIS (Liam: "tôi nghiêng theo bạn đấy, chốt 4 V đó cho tôi đi"; `01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md` mục "Kết quả", repo gốc `d580a05`)**, ghi tại chỗ. Tên ca thử trên xe đổi thành **X1–X4** (V12) để khỏi trùng "cách A/C" (plant) và "nhóm bài A".*
 
+*v2.3 (04/11, phiên CODE `local_ac004753…`, Liam: "Làm spec"): thêm §14 vòng vị trí x, y, (a) cửa sổ "đã tới vị trí", (d) logic dừng (O1 PA3, nhánh `feat/pos-loop`), cột log §8, cấu trúc code §9. §14 mô tả code đã viết (`7756e0b`), **chưa nạp, chưa qua Codex**; mục §14.7 chờ Liam/Codex xem.*
+
 ## 0. Thay đổi v1 → v2
 
 | Mục | Thay đổi | Nguồn |
@@ -20,6 +22,13 @@
 | §10 | fwsim: `v_true` lấy từ trạng thái thân của plant; luật chọn tần số đúng thứ nguyên | C2-#2, #3 |
 | §10 (v2.1) | Ca "IMU hợp lệ suốt" ở μ danh định + điều kiện `r_true`; sàn tuyệt đối `ΔPWM_min`; thí nghiệm tần số là dữ liệu phát triển | V1, V9, V11 |
 | §11 (mới) | Mục thuộc giả lập H7 (G0): `imu_seq`, dải gia tốc, cận số G3/G4: trạng thái và chỗ xử lý | C2-#9, #10, #12 |
+| §6.1, §7, §9 (28/10, Codex nhóm B, **Liam duyệt ở phiên CODE**) | #14 câu `r` ở §6.1 (`r = r_true + s·wz_thân`); #13 tiêu chí khởi tạo chỉ đếm report dùng được sau reset gần nhất; §9: #1 reset PID/LADRC ở cạnh motor tắt → bật, #12 điều kiện đứng yên và bộ đếm metric theo PWM thực áp sau lớp cắt vật cản (`vel_ctrl_applied`), #6 setpoint + thời điểm quỹ đạo đọc/ghi trong spinlock; #5 `missing_pct` theo `log_seq` + `#run_end` (`tools/s02_metrics.py`) | `docs/review/2026-10-28_Review_ctrl-imu_vong1.md` |
+| §14 (mới), §8, §9 (04/11, v2.3) | Vòng vị trí x, y (A1 + B1), (a), (d), mặc định BẬT; 12 cột log `pos_*`, `still` | Liam 04/11 ở phiên CODE: "được tôi duyệt, làm A1 + B1", "đồng ý làm a+d", "làm cách 1 ban khuyến nghị đi", "Làm cột log"; Liam chọn PA3 ở phiên THESIS (hồ sơ O1 mục 8) |
+| §14, §8 (05/11, v2.4) | Sửa theo Codex Sol vòng 1: vật cản, `θ_off`, tích phân, cột `run_active` + `pos_reset_n`, góc giữa tick, gói không hữu hạn; (d) giữ như cũ, ghi giới hạn | Liam 05/11 ở phiên CODE: "Duyệt theo khuyến nghị" (P3 + P4 chọn (A)) |
+| §14.7.3, §14.9 (05/11, v2.6) | Chốt (A): lượt có `pos_reset_n` tăng giữa chừng là lượt hỏng; chốt ngưỡng gói 2 m/s, 10 rad/s | Liam 05/11 ở phiên CODE `local_3e4e7ed6…`, nguyên văn: "chốt giữ ngưỡng và chọn (A), nếu sau này cần xét lại (B) thì bạn hãy đề xuất tiếp, còn giờ chốt A" |
+| §14 (05/11, v2.6) | Sửa theo Codex Sol vòng 3: tích phân vòng vị trí không đổi dấu khi bị chặn; chữ hết chặn, test, log gói bị bỏ | Liam 05/11 ở phiên CODE: "Chạy vòng 3", "Duyệt sửa cả 5" |
+| §14 (05/11, v2.5) | Sửa theo Codex Sol vòng 2: đầu ra vòng trong kẹp theo hướng bị chặn, tích phân vòng vị trí được xả khi bị chặn, gói lệnh ngoài miền bị bỏ, `wrap_pi` không treo với số hữu hạn lớn; sửa chữ 14.6, 14.7.7 | Liam 05/11 ở phiên CODE: "bạn cứ sửa và kiểm bằng test trước đi, lúc đó nếu cần gọi codex thì tính tiếp" |
+| §4.2, §6, §8, §13.1 (28/10, Codex rà code `ctrl-imu`) | Ngưỡng bão hòa gyro 34,9 → **31,4 rad/s** (N2: 0,9 × 34,9); cờ trượt khi không xét được theo §13.1 + cột log `slip_eval` (**#8 = (c), Liam duyệt 28/10 ở phiên CODE**); thêm cột log `src_switch_dwz`, `bias_updates` (#11) | `docs/review/2026-10-28_Review_ctrl-imu_vong1.md` |
 
 ## 1. Đã chốt (Liam 22/10)
 
@@ -43,14 +52,14 @@
 
 | Chỗ | Vấn đề | Trạng thái |
 |---|---|---|
-| `controller/vel_ctrl.c` | wz đo lấy từ encoder; IMU không tham gia | Chờ làm |
+| `controller/vel_ctrl.c` | wz đo lấy từ encoder; IMU không tham gia | **28/10 đã làm (nhánh `ctrl-imu`, đợt 1):** `imu_fusion.c` (§4, §6), `heading.c` (§5), `vel_ctrl_step` nhận `vel_ctrl_in_t` và gọi mỗi tick kể cả khi motor tắt; kiểm trên fwsim (`hil-framework` nhánh `ctrl-imu`, `fwsim/tests/test_fwsim_imu.py`); biên dịch ESP32, **chưa nạp** |
 | `imu/imu.cpp:69-96` | Thời điểm `esp_timer` + bộ đếm 32 bit mỗi report, hook cho log | Đã có (22/10) |
-| `imu/imu.cpp`, `main.c` | Khởi tạo lỗi chỉ in log rồi chạy tiếp | Chờ làm (§7) |
-| `BNO08xSH2HAL.cpp:143` | Sự kiện `SH2_RESET` của chip chỉ đặt bit nội bộ cho thư viện bật lại report; ứng dụng không biết chip đã reset | Chờ làm (§4.1) |
+| `imu/imu.cpp`, `main.c` | Khởi tạo lỗi chỉ in log rồi chạy tiếp | **28/10 đợt 2 (`ctrl-imu`):** `imu_init()` trả mã lỗi, thư viện chạy trong task riêng, chờ tối đa `T_init`, đạt khi đủ `N_init` report gyro + game RV; `main.c` lỗi thì không bật motor, LED xanh dương nháy + còi 1 dài 5 ngắn; biên dịch, **chưa nạp** |
+| `BNO08xSH2HAL.cpp:143` | Sự kiện `SH2_RESET` của chip chỉ đặt bit nội bộ cho thư viện bật lại report; ứng dụng không biết chip đã reset | **28/10 đợt 2:** `hal_cb` gọi `imu_note_chip_reset()` (`reset_n`, `reset_t_us`); bản weak trong thư viện để link được một mình. Không ghi vào bug log M7 (thêm chức năng, không phải lỗi) |
 | `src/main.c:255` | `#define HIL_BYPASS_MOTOR_ENABLE` đặt cứng cho **mọi** env, kể cả firmware xe: gạt SWA không tắt motor | Đề xuất §7b, chờ Liam duyệt |
 | `ibus/ibus.c:86-97` | Mất byte 20 ms thì `valid = false`; dòng dừng motor khi failsafe còn TODO | Đi cùng §7b |
-| `logger/logger.c:41,90,131` | Hàng đợi không chờ, `sendto` không kiểm lỗi, không đếm | §8 |
-| `test_imu_log.c:67` | In `IMU READY` cả khi khởi tạo lỗi (C2-N1) | §7 |
+| `logger/logger.c:41,90,131` | Hàng đợi không chờ, `sendto` không kiểm lỗi, không đếm | **28/10 đợt 2:** `log_seq`, `log_qdrop`, `log_send_err`, `motor_on` (dòng 10 Hz khi motor tắt), `imu_init`, 21 cột IMU/vòng hướng; dòng `#run_end` ×3 khi motor bật → tắt; PC `tools/agv_logger.py` (hil-framework `ctrl-imu`) đọc 28/37/63 cột (63 → **66** sau sửa Codex #11, #8 cùng ngày), tách dòng `#` ra `<file>.events.txt`; `s02_metrics.py` bỏ dòng `motor_on = 0` |
+| `test_imu_log.c:67` | In `IMU READY` cả khi khởi tạo lỗi (C2-N1) | **28/10 đợt 2:** chỉ in `IMU READY v2 period_us=… init_ms=…` khi đạt, lỗi in `IMU INIT FAIL <mã> …`; `imu_capture.py`, `g2_bno_check.py` đọc được dòng mới |
 | H7 giả lập BNO085 | `hil-framework` `g2-bno-h7`: lõi + SPI4/INT/RST, RPi5 gửi IMU không nhiễu (`rpi5/imu_model.py`) | Đã biên dịch, **chưa nạp, chưa kiểm G2** |
 
 ## 3. Dữ liệu IMU đưa vào controller
@@ -79,7 +88,7 @@ Vòng điều khiển 100 Hz giữ mẫu gần nhất của từng report (zero-
 | Đã nhận ít nhất một mẫu sau lần reset gần nhất | có | có | — |
 | Tuổi mẫu | `age_g ≤ T_age` | `age_r ≤ T_age` | `T_age` = 2,5 chu kỳ report [ĐỀ XUẤT: 125 ms ở 20 Hz, 25 ms ở 100 Hz] |
 | Giá trị hữu hạn | có | có | — |
-| Không bão hòa | `|gz| < 0,9 × 2000 °/s` (34,9 rad/s) | — | dải gyro ±2000 °/s (cấu hình hiện tại; kiểm SH-2 manual khi chốt) |
+| Không bão hòa | `|gz| < 0,9 × 2000 °/s` (31,4 rad/s; ~~34,9~~ [SỬA 28/10, Codex N2: 34,9 rad/s là 2000 °/s, chưa nhân 0,9]) | — | dải gyro ±2000 °/s (cấu hình hiện tại; kiểm SH-2 manual khi chốt) |
 | Không vừa reset | đã qua `T_settle` sau `reset_t_us` | như gyro; gốc yaw đổi nên vòng hướng đặt lại `ψ0` (§5) | `T_settle` [ĐỀ XUẤT: 0,5 s] |
 
 **wz dùng IMU khi gyro hợp lệ. Vòng hướng chạy khi yaw hợp lệ.** Hai điều kiện độc lập.
@@ -130,6 +139,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 
 - `r = wz_enc − gz`, chỉ xét khi gyro hợp lệ, có mẫu mới **và bánh đang quay**: `max_i |ω_i| ≥ ω_min` [ĐỀ XUẤT: `ω_min` = 2 rad/s, khoảng 4 count mỗi tick] (C2-#14). Bánh đứng yên thì không xét (kẹt cứng: encoder và gyro đều gần 0, cờ không bật là đúng).
 - Bật cờ khi `|r| > r_th` liên tục `T_slip`; tắt khi `|r| < r_th/2` liên tục `T_slip`.
+- **Khi không xét được** (gyro không hợp lệ hoặc `max_i |ω_i| < ω_min`): cờ đang bật thì tắt sau `T_slip` liên tục không xét được; timer bật đặt lại. Log có cột **`slip_eval`** (1 = tick này xét được `r`, 0 = không), nên `slip_flag = 0` cùng `slip_eval = 0` là "không xét được", không phải "không trượt"; đếm cờ ở §6.1 (X3, X4, ca không bơm) báo kèm % tick `slip_eval = 1`. (**Liam duyệt 28/10 ở phiên CODE**, Codex `ctrl-imu` #8 phương án (c).)
 - `r_th = k_r × √(σ_gz² + q_wz²)`: `q_wz` = 0,0196 rad/s (RMS lượng tử wz encoder, `03_CODE/CLAUDE.md`), `σ_gz` từ phép đo nhiễu. [ĐỀ XUẤT: `k_r` = 4, `T_slip` = 200 ms.]
 - Cờ chỉ ghi log và báo panel/LED; **không** đổi nguồn wz, không đổi gain.
 
@@ -137,7 +147,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 
 **Trên SIM/HIL: cách C (bơm có kiểm soát) trên nền plant cách A (Liam 27/10 khuya, §1b.4).**
 
-- **Bơm vào đâu (V2, Liam chốt (a)):** **ở đầu vào mô hình gyro**: gyro giả thấy `(1 − s)·wz_thân` trong khoảng bơm, trạng thái plant không đổi, nên `r` biết chính xác và không phụ thuộc A. Luận văn gọi là *controlled IMU–encoder inconsistency injection*; trượt vật lý để cho A. *(Phương án (b) bơm vào trạng thái thân: không chọn.)* Vì bơm nằm ở mô hình IMU, chỗ code là `rpi5/imu_model.py` (dùng chung RPi5 và fwsim), không phải `plant_step.py`. Đây là năng lực của bộ HIL, thuộc claim C7 Ch. 3 (V8, Liam chốt (a); THESIS sửa `.tex` sau khi Liam duyệt câu chữ). Khoảng bơm `[t0, t0 + T_inj]` khóa trước. Python plant (RPi5) và fwsim dùng chung code. C là **tín hiệu thử**, không kiểm fidelity.
+- **Bơm vào đâu (V2, Liam chốt (a)):** **ở đầu vào mô hình gyro**: gyro giả thấy `(1 − s)·wz_thân` trong khoảng bơm, trạng thái plant không đổi. ~~nên `r` biết chính xác và không phụ thuộc A~~ *[SỬA 28/10, Codex `ctrl-imu` #14, Liam duyệt]:* phần bơm `s·wz_thân` biết chính xác và không phụ thuộc A; còn `r` tổng là `r = r_true + s·wz_thân` (bỏ qua lượng tử encoder), với `r_true` là trượt thật của plant A. Vì vậy các ca bơm chạy ở **μ danh định** và chỉ tính khi `|r_true| < r_th/2` suốt lượt (như ca không bơm, V1), để `r` gần bằng phần bơm. Luận văn gọi là *controlled IMU–encoder inconsistency injection*; trượt vật lý để cho A. *(Phương án (b) bơm vào trạng thái thân: không chọn.)* Vì bơm nằm ở mô hình IMU, chỗ code là `rpi5/imu_model.py` (dùng chung RPi5 và fwsim), không phải `plant_step.py`. Đây là năng lực của bộ HIL, thuộc claim C7 Ch. 3 (V8, Liam chốt (a); THESIS sửa `.tex` sau khi Liam duyệt câu chữ). Khoảng bơm `[t0, t0 + T_inj]` khóa trước. Python plant (RPi5) và fwsim dùng chung code. C là **tín hiệu thử**, không kiểm fidelity.
 - **Trượt thật của plant A (V1):** plant A ghi thêm `r_true = wz_suy_từ_bánh − wz_thân` mỗi bước (từ trạng thái plant). Mỗi lần cờ bật được phân loại **đúng** (`|r_true| ≥ r_th/2`, hoặc đang trong cửa sổ bơm) hay **nhầm**.
 - **Đặt ca theo biên độ r mục tiêu (V3):** ca dưới ngưỡng `r ≈ 0,5·r_th`, ca trên ngưỡng `r ≥ 2·r_th`; `s` của từng bài tính sau khi đo nhiễu (K1, ra `σ_gz`), khóa cùng các ngưỡng khác (QĐ 21).
 
@@ -163,7 +173,7 @@ Bias = trung bình gz trong cửa sổ; cập nhật bằng lọc chậm; mỗi 
 
 ## 7. Khởi tạo và báo lỗi
 
-- `imu_init()` trả mã lỗi. Khởi tạo **đạt** khi trong `T_init` [ĐỀ XUẤT: 2 s] nhận được ít nhất `N_init` report **gyro và game RV** [ĐỀ XUẤT: 3 mỗi loại], không chỉ dựa vào `sh2_open` (thư viện có thể báo thành công giả hoặc treo: G0 v1 R1, R2, R10).
+- `imu_init()` trả mã lỗi. Khởi tạo **đạt** khi trong `T_init` [ĐỀ XUẤT: 2 s] nhận được ít nhất `N_init` report **gyro và game RV** [ĐỀ XUẤT: 3 mỗi loại] **dùng được** (gyro hữu hạn, `|gz|` dưới ngưỡng bão hòa §4.2; game RV hữu hạn), **đếm từ lần reset chip gần nhất** (Codex `ctrl-imu` #13, Liam duyệt 28/10), không chỉ dựa vào `sh2_open` (thư viện có thể báo thành công giả hoặc treo: G0 v1 R1, R2, R10).
 - Watchdog: `imu_init` chạy trong task riêng có hạn `T_init`; quá hạn là lỗi.
 - Lỗi khởi tạo → không bật motor, ở trạng thái lỗi:
   - **xe thật (Liam 27/10):** LED RGB (GPIO48) **xanh dương nháy** (Liam 28/10) + còi (GPIO17) **1 tiếng dài rồi 5 tiếng ngắn**, lặp [ĐỀ XUẤT: dài 600 ms, nghỉ 200 ms, ngắn 120 ms bật / 120 ms tắt, lặp mỗi 3 s];
@@ -186,7 +196,7 @@ Hệ quả: nạp firmware xe thì phải bật SWA mới chạy motor; nạp b�
 
 ## 8. Log và metric
 
-**Cột thêm (100 Hz):** `wz_enc`, `gz`, `yaw` (rad), `age_g_ms`, `age_r_ms`, `gyro_n`, `rv_n`, `reset_n`, `g_valid`, `r_valid`, `wz_src` (0 = encoder, 1 = IMU), `psi_ref`, `e_psi`, `head_on`, `slip_flag`, `r`, `psi_reset_count`, `bias_gz`, `log_seq`, `log_qdrop`, `log_send_err`. Giữ tên cột cũ; đơn vị yaw ghi trong header log.
+**Cột thêm (100 Hz):** `wz_enc`, `gz`, `yaw` (rad), `age_g_ms`, `age_r_ms`, `gyro_n`, `rv_n`, `reset_n`, `g_valid`, `r_valid`, `wz_src` (0 = encoder, 1 = IMU), `psi_ref`, `e_psi`, `head_on`, `slip_flag`, `r`, `psi_reset_count`, `bias_gz`, `log_seq`, `log_qdrop`, `log_send_err`; thêm 28/10 ở cuối dòng: `src_switch_dwz`, `bias_updates` (Codex #11), `slip_eval` (§6, #8 (c)). Giữ tên cột cũ; đơn vị yaw ghi trong header log. Log firmware `ctrl-imu` nay 66 cột. *(v2.3, 04/11)* Thêm cuối dòng 14 cột vòng vị trí (§14.6; 12 cột ở v2.3, thêm `run_active`, `pos_reset_n` ở v2.4): 80 cột ở `feat/pos-loop`; firmware chiến dịch thêm 5 cột `ws_*` của `feat/wheel-slip` **sau** các cột này, tổng 85 cột như `tools/agv_logger.py` (hil-framework `feat/log-pos-ws`).
 
 **Metric (giữ v1):**
 - Khi điều khiển theo gyro, e_wz tính từ chính gz không còn khách quan: SIM/HIL so với giá trị thật của plant; xe thật so với camera (QĐ 7, 8). Log luôn có cả `wz_enc` lẫn `gz`.
@@ -206,7 +216,9 @@ Hệ quả: nạp firmware xe thì phải bật SWA mới chạy motor; nạp b�
 
 - `controller/imu_fusion.c/.h` (**C thuần**, chạy được trong fwsim): kiểm hợp lệ theo mẫu mới và sự kiện reset, chuyển nguồn, bias khi đứng yên, cờ trượt.
 - `controller/heading.c/.h` (C thuần): vòng giữ hướng, bảng ưu tiên §5.
+- *(v2.3)* `controller/pos_ctrl.c/.h` (C thuần): vòng vị trí x, y và cửa sổ (a), §14; logic dừng (d) nằm trong `vel_ctrl.c` (tham số `vel_ctrl_still_params()`).
 - `vel_ctrl_step` nhận thêm mẫu IMU (giá trị, `*_t_us`, `*_n`, `reset_n`) và trả các cột log §8.
+- *(28/10, Codex nhóm B, Liam duyệt)* Cạnh motor tắt → bật: `vel_ctrl_step` reset PID/LADRC (tích phân, ESO, `u_prev`), bước PWM đầu tính từ 0 (#1). Sau lớp cắt vật cản, `main.c` gọi `vel_ctrl_applied(pwm_thực_áp)`: điều kiện đứng yên (§4.4) và bộ đếm metric (S02) tính theo PWM thực áp, không theo lệnh (#12). `g_setpoint` và `g_last_traj_us` chỉ đọc/ghi trong spinlock (#6).
 - `imu/imu.cpp`: đọc chip, gắn thời điểm/bộ đếm (đã có), khởi tạo có hạn (§7), bộ đếm reset (§3).
 - Thư viện: thêm 1 lời gọi tăng `reset_n` ở `BNO08xSH2HAL.cpp:143`. Lõi giả lập `bnoemu_pc` (G1) không biên dịch file này nên không ảnh hưởng.
 - `led_buzzer`: mẫu báo lỗi IMU (§7).
@@ -257,3 +269,89 @@ Mỗi metric so với ngưỡng **cùng thứ nguyên**: `δ_wz` = 1/512 rad/s (
 - ~~THESIS kiểm lại §6.1 và §10~~ **[XONG 27/10]:** O2 lượt 2 (`01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md`); v2.1 đã sửa V1, V3–V6, V9, V11–V14.
 - ~~Chờ Liam: V2, V7, V8, V10~~ **[XONG 27/10, v2.2]:** Liam chốt 27/10 ở phiên THESIS (Liam: "tôi nghiêng theo bạn đấy, chốt 4 V đó cho tôi đi"; `01_THESIS/review/2026-10-27_Kiem_spec_controller_IMU_v2.md` mục "Kết quả", repo gốc `d580a05`): V2 (a) bơm ở đầu vào gyro; V7 có (X3 đối chiếu A, đo μ_hd mặt trơn); V8 (a) bơm C vào claim C7; V10 (b) δ theo mục tiêu nhiệm vụ, lối thoát độ phân giải.
 - `PWM_X12`, `T_X12` (V6): Liam duyệt khi viết env đo X1–X2.
+
+## 13. Cách hiểu khi code đợt 1 (CODE 28/10, nhánh `ctrl-imu`; chỗ spec chưa nói rõ, chờ Liam/THESIS xem)
+
+1. **Cờ trượt khi không xét được** (gyro không hợp lệ hoặc bánh dưới `ω_min`): cờ đang bật thì tắt sau `T_slip`; timer bật đặt lại. Spec §6 chỉ nói "chỉ xét khi…". **[XONG 28/10: Liam chọn (c) ở phiên CODE, đã đưa vào §6 + cột `slip_eval`.]**
+2. **Vòng hướng chỉ chạy ở MODE_AUTO** (`run_active` = motor enable + AUTO + quỹ đạo còn mới, `main.c`); MANUAL: tắt vòng hướng, wz vẫn lấy từ IMU khi hợp lệ.
+3. **`k_ψ` khởi đầu = 1,0 1/s** (giá trị khởi đầu, chưa tune; spec chỉ ghi "vào miền GA").
+4. **"Lọc chậm" của bias:** mỗi cửa sổ `T_still` đạt, bias tiến về trung bình gz của cửa sổ một bước không quá `b_step` (bộ giới hạn tốc độ).
+5. **σ chưa đo nên đặt 0:** bias không bao giờ cập nhật; `r_th` = 4 × 0,0196 = 0,078 rad/s (chỉ còn phần lượng tử). Đặt σ sau K1 (`imu_fusion_params()`, fwsim `fw_params`).
+6. **`ΔPWM_min` = 20** (2 % PWM_MAX) dùng tạm trong test fwsim; chưa khóa (QĐ 21).
+7. **Đếm `psi_reset`:** cộng 1 ngay lúc có sự kiện reset chip / đổi mode khi đang chạy (ưu tiên 1), và lúc đặt lại `ψ_ref` (ưu tiên 4).
+8. **Reset chip lúc khởi động** (`reset_n` ở lần đọc đầu) là mốc, không phải sự kiện; `T_settle` vẫn tính từ đó.
+9. **Đọc IMU trong `control_task`:** gọi thẳng `imu_get()` (có mutex) mỗi tick; bỏ `imu_task` vì bản sao `volatile` cũ có thể bị đọc lệch khi task ưu tiên cao chen vào giữa lúc sao chép.
+10. **Cột log trùng tên (đợt 2):** spec §8 ghi cột `yaw` (rad) và `gz`, nhưng log cũ đã có `yaw` (độ) và `gz` (gyro thô); giữ cột cũ, thêm `yaw_rad`, `gz_fused` (đã trừ bias); `wz` cũ chính là `wz_enc`.
+11. **Dòng tổng kết `#run_end`** gửi khi motor bật → tắt (một "lượt"); mang `seq` của chính dòng đó và `last_data_seq`.
+12. **`s01_openloop` (v2):** ghi report IMU trong lượt thành dòng `I,…` sau các mẫu (bộ đệm riêng 1024 report, đủ 12 s ở 20 Hz); IMU khởi tạo lỗi thì mọi `RUN` trả `ERR imu <mã>`.
+13. **`T_init` tính từ lúc gọi `imu_init()`**, gồm cả thời gian thư viện reset và mở chip; chưa đo thời gian này trên chip thật: lần nạp đầu đọc `init_ms` trong log (`IMU READY … init_ms=`, `OL READY v2 … init_ms=`) để kiểm 2 s có đủ không.
+
+## 14. Vòng vị trí x, y, (a) cửa sổ "đã tới vị trí", (d) logic dừng (v2.3, 04/11)
+
+*Căn cứ: O1 PA3 (hồ sơ O1 mục 8, Liam chọn PA3 ở phiên THESIS 04/11: vòng vị trí vào firmware thật, bật cho cả hai chiến dịch RQ3); ước lượng `03_CODE/docs/2026-11-04_Uoc_luong_PA3_vong_vi_tri.md` (repo gốc); chẩn đoán dao động LADRC `05_DATA/results/O1_FEAS/2026-11-04_run05_diag/phan_tich.md`. Code: `feat/pos-loop` (`377a01f` vòng vị trí, `1adab89` (a) + (d), `164bc3f` mặc định BẬT, `7756e0b` cột log, `9110532` sửa theo Codex Sol vòng 1). Mọi số [ĐỀ XUẤT] chưa tune, chưa kiểm trên board.*
+
+*v2.4 (05/11, phiên CODE `local_ac004753…`): sửa theo Codex Sol vòng 1 (`03_CODE/docs/review/2026-11-05_Review_PosLoop_WheelSlip_vong1.md`, repo gốc), Liam "Duyệt theo khuyến nghị": P1 vật cản (14.4), P2 `θ_off` (14.3), P5 tích phân (14.4), P6 cột log (14.6), P7 góc giữa tick (14.3), P8 chữ (14.7.3), P14 (14.6), P18 gói không hữu hạn (14.9); P3 + P4 chọn (A): giữ (d), ghi giới hạn (14.7.6–7).*
+
+*v2.5 (05/11, phiên CODE `local_3e4e7ed6…`): sửa theo Codex Sol vòng 2/2 (`03_CODE/docs/review/2026-11-05_Review_PosLoop_WheelSlip_vong2.md`, repo gốc), Liam: "bạn cứ sửa và kiểm bằng test trước đi, lúc đó nếu cần gọi codex thì tính tiếp": P1 phần còn lại (14.2, 14.4), P18 phần còn lại (14.9), Q1, Q2 (14.8), Q3 (14.6, 14.7.7). **Phần sửa v2.5 chưa qua Codex.***
+
+*v2.6 (05/11, cùng phiên): Codex Sol vòng 3 (Liam "Chạy vòng 3"; `03_CODE/docs/review/2026-11-05_Review_PosLoop_WheelSlip_vong3.md`), Liam "Duyệt sửa cả 5": R1 tích phân không đổi dấu khi bị chặn (14.4), R2 chữ (14.4, 14.8), R3 test (14.8), R4 log (14.9). **Hết chặn:** tích phân có từ trước lúc chặn (vòng vị trí, PID, ESO) vẫn còn, xe trở lại trạng thái trước lúc chặn; yêu cầu an toàn là không có lệnh về phía vật cản **trong lúc** chặn. Phần sửa v2.6 chưa qua Codex.*
+
+### 14.1. Đã chốt (Liam 04/11, phiên CODE)
+
+1. **A1, nguồn tư thế lệnh:** ESP32 tự tích phân tư thế lệnh từ vận tốc lệnh hệ thân nhận được; không đổi giao thức Pi → ESP32, không đụng H7, S06.
+2. **B1, vòng hướng:** giữ `heading.c` (§5); vòng vị trí chỉ điều khiển x, y.
+3. **(a) + (d)** để LADRC + vòng vị trí không săn lúc đứng yên; (b) bù vùng chết duty và (c) gain LADRC để sau (nhắc khi khóa miền GA / trong chiến dịch GA).
+4. **Mặc định BẬT** cả vòng vị trí, (a), (d) bằng giá trị mặc định trong code, không env hay cờ build riêng: env chính (PID) và env `ladrc` chỉ khác `CTRL_MODE`, nên hai chiến dịch cùng cấu trúc. Bản không có vòng vị trí: fwsim đặt `pos_on = 0` lúc chạy (`fwsim.vel_loop_only()`); trên board checkout commit cũ.
+
+### 14.2. Vị trí trong `vel_ctrl_step` (`vel_ctrl.c` 96–134)
+
+FK encoder → `imu_fusion` → `heading` (ra `wz_cmd`) → **(d) xét giữ** → **vòng vị trí** (`pos_step`, cộng `corr_vx`, `corr_vy` vào vx, vy lệnh) → **cắt vật cản lần hai** (v2.4) → PID/LADRC vận tốc thân → *(v2.5)* **kẹp đầu ra vòng trong theo hướng bị chặn** → IK → PWM → **(d) đang giữ thì PWM 0**. Vòng vị trí chỉ sửa vx, vy; wz vẫn theo `wz_cmd` của §5. `vel_ctrl_out_t.v_cmd` là lệnh vào vòng trong (vx, vy sau hiệu chỉnh và cắt, `wz_cmd`).
+
+### 14.3. Tư thế lệnh và tư thế ước lượng (`pos_ctrl.c` 58–97)
+
+- **Bắt đầu chạy** (`run_active` lên; `run_active` = motor enable + MODE_AUTO + quỹ đạo còn mới, `main.c` 516): tư thế lệnh, tư thế ước lượng, tích phân về 0; `pos_reset_n` tăng 1. Hệ toạ độ là hệ thân lúc bắt đầu chạy.
+- **Tư thế lệnh (A1):** `x_ref += (vx_ref·cos θ_mid − vy_ref·sin θ_mid)·dt` với `θ_mid = θ_ref + wz_ref·dt/2`, `y_ref` tương tự, rồi `θ_ref += wz_ref·dt` (wrap). Vận tốc lệnh là lệnh sau interlock vật cản, trước hiệu chỉnh.
+- **Hướng ước lượng:** khi vòng hướng đang chạy (`head_on`), `θ = ψ_imu + θ_off`. *(v2.4, Codex P2)* `θ_off` chỉ đặt lại khi hệ `ψ_imu` đổi, tức `heading.c` đặt `ψ0` mới (bộ đếm `psi0_n`: bắt đầu chạy, reset chip, đổi mode), để `θ` liên tục; yaw mất rồi có lại trong cùng hệ thì giữ `θ_off` cũ, `θ` quay về theo IMU và không giữ sai số encoder của quãng mất yaw. Khi không chạy theo IMU: tích phân wz encoder.
+- **Vị trí ước lượng:** vx, vy encoder (FK) xoay theo góc giữa tick `θ_m` = trung điểm của `θ` cũ và mới, tích phân. *(v2.4, Codex P7)* Cùng quy ước góc giữa tick với tư thế lệnh; trước đó hai bên lệch nhau tới khoảng `2·v·dt` (1,6 cm ở 0,8 m/s) dù vận tốc trùng nhau.
+- **Giới hạn thêm (v2.4):** `ψ_imu` cập nhật theo report yaw (20 Hz), giữa hai report `θ` đứng yên; thời điểm yaw và encoder chưa đồng bộ, góc chưa dự báo tới tick hiện tại (Codex P2 đề xuất; chưa làm).
+- **Giới hạn:** tư thế ước lượng dựa trên encoder nên vòng vị trí **không sửa được trôi do trượt bánh hay sai bán kính bánh**; phần đó chỉ phép đo ngoài (camera, O1 `e_đo`) thấy.
+
+### 14.4. Vòng x, y (`pos_ctrl.c` 41–56, 99–123)
+
+- Sai số `(x_ref − x, y_ref − y)` xoay về hệ thân (`ex_b`, `ey_b`); mỗi trục PI có feedforward theo M6: `v_cmd = v_ref + sat(Kp·e + Ki·∫e, v_corr_max)`.
+- **Anti-windup như M6:** tích phân chỉ nhận khi đầu ra thử chưa bão hòa, hoặc sai số khác dấu với tích phân cũ.
+- Tham số [ĐỀ XUẤT]: `Kp` = 6 1/s, `Ki` = 3 1/s² (lấy từ M6 `params_mecanum.m`, chỉnh cho plant mô-men cũ; **chưa tune**, vào miền GA cùng gain vòng trong, QĐ 12); `v_corr_max` = 0,5 m/s mỗi trục.
+- Không hiệu chỉnh khi: vòng tắt (`on = false`), trong cửa sổ (a), hoặc (d) đang giữ. *(v2.4, Codex P5)* Hai trường hợp sau **xóa tích phân** `ix`, `iy`, để lúc ra không nhảy lệnh `Ki·∫e`.
+- *(v2.4, Codex P1, P0 an toàn)* **Vật cản:** `main.c` đưa cờ chặn 4 hướng (`s_*_blocked`, hệ thân) vào `vel_ctrl_in_t.block_*`. Trục nào có hướng bị chặn thì phần hiệu chỉnh về hướng đó = 0 và tích phân trục đó không lớn thêm (`axis()`; *(v2.5, Codex vòng 2 P1; v2.6, vòng 3 R1)* tích phân ở trong đoạn giữa giá trị cũ và 0: không lớn thêm, không đổi dấu, vẫn xả được khi sai số ngược dấu); `vel_ctrl.c` cắt lần hai lệnh sau hiệu chỉnh; *(v2.5)* sau PID/LADRC, `vel_ctrl.c` kẹp `ctrl_out.vx`/`vy` về 0 nếu đi vào hướng bị chặn (tích phân PID hay ESO còn lại có thể đẩy xe tới khi lệnh đã = 0; ESO nhận `u` đã kẹp), kẹp từng trục nên vẫn đi ngang được khi trước bị chặn; hard cutoff PWM ở `main.c` (10b) xét cả lệnh gốc (`intent_*`) lẫn `v_cmd`. Trước v2.4, interlock chỉ thấy lệnh gốc nên hiệu chỉnh vị trí có thể đẩy xe về phía vật cản khi lệnh = 0; phần tích phân vòng trong đẩy tới khi lệnh = 0 có từ trước vòng vị trí (`ctrl-imu`).
+
+### 14.5. (a) Cửa sổ "đã tới vị trí" và (d) logic dừng
+
+- **(a)** (`pos_ctrl.c` 105–112): chỉ khi lệnh vận tốc = 0 (cả vx, vy, wz). Vào cửa sổ khi `|e| < e_win`, ra khi `|e| > e_exit` hoặc có lệnh khác 0. [ĐỀ XUẤT] `e_win` = 5 mm, `e_exit` = 10 mm: lớn hơn dải sai số lúc săn trên fwsim (2–4 mm, run05_diag), rất nhỏ so với `D` = 0,10 m của O1. `e_win ≤ 0` tắt cửa sổ.
+- **(d)** (`vel_ctrl.c` 96–113, 176–181): lệnh = 0 và `|vx|, |vy| < v_still`, `|wz| < v_still/(LX + LY)` (vận tốc encoder) liên tục `t_still` → **giữ**: PWM 0 cả 4 bánh, reset PID/LADRC mỗi tick, vòng vị trí không hiệu chỉnh. Thoát khi lệnh khác 0 hoặc motor tắt; đang giữ mà xe trôi nhanh hơn ngưỡng thì vẫn giữ (lệnh vẫn = 0). [ĐỀ XUẤT] `v_still` = 0,05 m/s (lớn hơn đỉnh tốc độ lúc săn trên fwsim, ≤ 0,045 m/s, run02–run05_diag), `t_still` = 0,5 s (để không giữ giữa lúc đổi chiều). (d) không đòi `run_active`: ở MANUAL, cần điều khiển về giữa cũng giữ.
+- Kết quả fwsim (số mô phỏng, `O1_FEAS/2026-11-04_run06`, plant cách A μ 0,5, gain mặc định): cả 6 lượt O1 (PID, LADRC × 0,2 / 0,5 / 0,8 m/s) hoàn thành điều kiện dừng; lệch lúc dừng LADRC 4–7 mm.
+
+### 14.6. Cột log (§8; `logger.c`, `main.c` `push_log`)
+
+14 cột sau `slip_eval`: `pos_on` (vòng đang hiệu chỉnh), `pos_x`, `pos_y`, `pos_th` (tư thế ước lượng, m, m, rad), `pos_x_ref`, `pos_y_ref`, `pos_th_ref` (tư thế lệnh), `pos_corr_vx`, `pos_corr_vy` (m/s, cộng vào lệnh), `pos_th_src` (0 encoder, 1 IMU), `pos_in_pos` (a), `still` (d), *(v2.4, Codex P6)* `run_active` (tư thế chỉ tích phân khi 1; khi 0 các cột tư thế `pos_x`, `pos_y`, `pos_th`, `pos_*_ref` đứng yên, không phải ước lượng hiện tại, còn `pos_on`, `pos_corr_*`, `pos_in_pos` về 0; *(v2.5, Codex vòng 2 Q3)*), `pos_reset_n` (số lần đặt lại tư thế từ khi khởi động; tăng giữa lượt là lượt có đặt lại, xem 14.7.3). Lệnh vận tốc vào vòng trong = `sp_vx + pos_corr_vx`, `sp_vy + pos_corr_vy` (rồi cắt vật cản), `wz_cmd`. 80 cột ở `feat/pos-loop`; 85 cột khi thêm `ws_*`. Bộ đệm dòng log 1024 byte (static); dòng dài nhất ước tính khoảng 820 byte (80 cột) khi mọi số thực |x| < 1e5 (miền vật lý), không phải biên kiểu C (Codex P14); dòng quá dài hay lỗi định dạng bị bỏ và tăng `log_send_err`.
+
+### 14.7. Hệ quả và chỗ chờ Liam/Codex xem
+
+1. **Metric nhóm A (S02, `ch3` dòng 236):** metric so vận tốc đo với setpoint, còn lệnh thực áp có thêm hiệu chỉnh vị trí. Bài bậc tốc độ có vọt khi vòng vị trí đuổi phần trễ đầu bài (chạy thử fwsim 04/11, LADRC bậc 0,1 m/s: đỉnh 0,145 m/s; không lưu file đo, test `test_adrc_no_steady_error` nay chạy với `vel_loop_only`). Số S02 P2-SIM run02/run03 (không có vòng vị trí) phải chạy lại trên firmware chiến dịch trước khi so với HIL.
+2. **Bias khi đứng yên (§4.4):** lúc (d) giữ, PWM = 0 cả 4 bánh nên điều kiện "setpoint = 0 và PWM = 0" của §4.4 đạt; nếu các điều kiện còn lại cũng đạt, bias được học trong lúc giữ (chạy thử fwsim 04/11, lệch gyro 0,01 rad/s, σ đặt 0,01: 2 lần cập nhật trong 6 s; trước khi có (d) là 0). Đúng chữ §4.4; ghi để Codex và THESIS biết đây là hành vi mới của firmware chiến dịch.
+3. **Đặt lại tư thế khi `run_active` rớt giữa lượt:** `run_active` cần quỹ đạo còn mới (`TRAJ_TIMEOUT_US` 200 ms, `main.c` 39, 446–447). *(v2.4, Codex P8)* Ở `ctrl-imu`/`feat/pos-loop`, `traj_task` đóng dấu thời điểm sao chép gói cũ mỗi 10 ms trong khi bộ nhận còn giữ nguồn hợp lệ, nên hết hạn thực tế tới khoảng 400 ms sau gói thật cuối; `feat/one-binary` (firmware chiến dịch) đã dùng thời điểm nhận thật (`s.t_rx_us`), hết hạn 200 ms. Mất gói quá hạn giữa lượt thì lần có gói lại, tư thế lệnh và ước lượng về 0: sai số tích lũy trước đó mất, vòng vị trí không kéo xe về đường cũ. `heading.c` cũng đặt lại `ψ0` khi bắt đầu chạy (§5). Từ v2.4 log thấy được (`run_active`, `pos_reset_n`). ~~**Chưa quyết:** giữ như vậy (lượt có `pos_reset_n` tăng giữa chừng là lượt hỏng; O1 mục 5.3 ghi gói nhận) hay chỉ đặt lại khi bắt đầu lượt mới (cần tín hiệu lượt từ Pi).~~ **Đã chốt (A)** (Liam 05/11 ở phiên CODE `local_3e4e7ed6…`, nguyên văn: "chốt giữ ngưỡng và chọn (A), nếu sau này cần xét lại (B) thì bạn hãy đề xuất tiếp, còn giờ chốt A"): giữ như vậy; **lượt có `pos_reset_n` tăng giữa chừng là lượt hỏng, chạy lại**; không đổi giao thức Pi → ESP32 (A1). Lý do: mất gói quá hạn thì xe đã dừng giữa lượt, và tư thế lệnh thiếu luôn đoạn không nhận gói nên giữ tư thế cũ cũng không đúng đường của Pi. Việc kèm: script phân tích (O1, S02) tự đánh dấu lượt hỏng theo `pos_reset_n` (chưa làm). Xét lại (B) (đặt lại chỉ khi Pi báo bắt đầu lượt) nếu đo thấy mất gói quá hạn thường xuyên; CODE đề xuất khi đó.
+4. **Đổi PID ↔ LADRC và reset chip giữa lượt:** không đặt lại tư thế (khác ước lượng PA3 mục 2 ghi "reset cùng các sự kiện của `heading.c`"); hướng ước lượng chuyển nguồn liên tục (14.3). Cách hiểu của CODE: tư thế là của quỹ đạo, không của controller; chờ Liam/Codex xem.
+5. Mọi ngưỡng §14 [ĐỀ XUẤT]: chốt cùng buổi thử hệ đo O1 và kiểm trên xe kê bánh; `Kp`, `Ki` vào miền GA.
+6. *(v2.4, Codex P3; Liam 05/11 chọn (A))* **(d) cắt cả vòng giữ hướng:** khi giữ, PWM = 0 cả 4 bánh, nên lệch hướng còn lại lúc dừng (`e_psi` ≠ 0, vòng hướng vẫn tính `wz_cmd` ≠ 0) không được sửa; xe bị xoay trong lúc giữ cũng không thoát giữ. Giữ hành vi này để (d) chặn được săn; lệch hướng lúc dừng có trong log (`e_psi`, `head_on`) và đo bằng camera (O1). Cách (B) (thêm điều kiện `|e_psi|` nhỏ để vào giữ) không chọn vì vòng hướng LADRC còn lệch 2–3° lúc dừng (run02) thì (d) không bao giờ vào.
+7. *(v2.4, Codex P4; Liam 05/11 chọn (A))* **(d) không xét sai số vị trí:** vùng chết duty làm xe đứng yên 0,5 s trước khi tới đích thì (d) giữ, phần sai số còn lại không được sửa; K2 dừng 1 s ở mỗi góc cũng vào giữ nếu vận tốc encoder dưới ngưỡng liên tục đủ `t_still` (0,5 s) trong lúc dừng *(v2.5, Codex vòng 2 Q3)*. Ghi là giới hạn; xử lý cùng (b) bù vùng chết khi khóa miền GA. Một lần ra khỏi giữ (lệnh khác 0) thì vòng vị trí sửa tiếp, tích phân bắt đầu từ 0 (14.4).
+
+### 14.8. Kiểm trên PC (fwsim, hil-framework `feat/fwsim-doe` `fwsim/tests/test_fwsim_pos.py`)
+
+*(v2.4)* Đạt trên DLL build từ `9110532` (hil-framework `2259813`, `c203ed1`: 65 test fwsim đạt, 8 bỏ qua là test cờ trượt). Thêm ở v2.4: chặn hướng trước thì không hiệu chỉnh về trước, tích phân không tăng, hướng khác vẫn hiệu chỉnh (P1); yaw mất 2 lần, `θ − ψ_imu` không đổi (P2); tích phân xóa trong cửa sổ (P5); `pos_reset_n`, `run_active` (P6); `Ki` có tác dụng khi chưa bão hòa trên hai trục, cửa sổ vào dưới 5 mm, giữ tới 10 mm, góc trong [−π, π] (P16). Năm test P1, P2, P5, P6 trượt trên DLL từ `dc2c521`; đột biến bỏ tích phân bị test `Ki` bắt. Chưa có test riêng cho P7 (vận tốc lệnh và encoder trùng tuyệt đối) và cho hard cutoff của `main.c` (fwsim lặp lại điều kiện đó trong `fw_sim.c`).
+
+*(v2.5)* Thêm: đầu ra vòng trong không đi vào hướng bị chặn sau khi tích phân/ESO đã nạp, PID và LADRC (vòng 2 P1); đi ngang vẫn chạy khi trước bị chặn; tích phân vòng vị trí xả khi sai số đổi dấu lúc bị chặn, hiệu chỉnh đã âm thì hết chặn vẫn âm (vòng 2 P1; *(v2.6)* test chỉ kiểm ca này); `wz` = 1e12 không treo `wrap_pi` (vòng 2 P18, chạy trong tiến trình con có giới hạn thời gian). Test anti-windup tắt (a), (d) (vòng 2 Q2). fwsim lặp bước interlock 7c của `main.c` trước `vel_ctrl_step` (vòng 2 Q1). Bộ nhận gói (`traj_receiver.c`) không có trong fwsim nên chặn miền ở 14.9 chưa có test. *(v2.6)* Thêm: tích phân âm nhỏ, sai số dương một tick làm `e·dt` bằng 1–2 lần |tích phân|, trước bị chặn: tích phân không sang dương (vòng 3 R1). Test `wz` = 1e12 chạy ở LADRC: ở PID `wz` cộng thẳng vào tốc độ bánh rồi ép `float → int` ngoài miền ở bước PWM (hành vi không xác định, vòng 3 R3; firmware thật đã bỏ gói như vậy ở bộ nhận).
+
+Bản v2.3, đạt trên DLL build từ `7756e0b` (59 test fwsim đạt, 7 bỏ qua là test cờ trượt): mặc định đọc lại đúng; tắt theo tên thì không hiệu chỉnh; tư thế lệnh trùng số 8 kế hoạch (< 2 cm) và về gốc; tư thế ước lượng cách tư thế thật < 2 cm trên plant cứng không nhiễu, `θ` lấy từ IMU > 99 % tick; `θ` theo yaw IMU khi vòng hướng chạy; vòng giảm sai số ước lượng trên đường thẳng ≥ 2 lần; bão hòa ở `v_corr_max`, tích phân không tràn; bắt đầu chạy lại đặt tư thế về 0; wrap góc không giật; LADRC + (a) + (d) hoàn thành O1 ở 3 tốc độ, giữ thì PWM 0; giữ chỉ sau `t_still` khi đã chậm, thoát ngay khi có lệnh; (a) chỉ khi lệnh = 0; (d) chặn hiệu chỉnh. **Trên board:** kiểm HIL ở buổi vòng kín HIL đầu, kê bánh ở buổi kiểm controller IMU trên xe; hướng dẫn soạn sau Codex.
+
+### 14.9. Gói lệnh không hữu hạn (v2.4, Codex P18, ngoài phạm vi vòng vị trí)
+
+`traj_receiver.c` `_parse_packet` bỏ gói đúng checksum mà `vx`, `vy` hoặc `wz` là NaN/±Inf (dòng 40). `wrap_pi` của `heading.c`, `imu_fusion.c`, `pos_ctrl.c` trả 0 khi đầu vào không hữu hạn. Trước v2.4, `wz` = +Inf làm `wrap_pi` lặp mãi trong `control_task`: motor giữ PWM cuối, SWA không còn được xét. ~~Chưa giới hạn miền giá trị lệnh (chỉ kiểm hữu hạn).~~ *(v2.5, Codex vòng 2 P18)* Số hữu hạn lớn cũng làm treo (float32: `1e10 − 2π == 1e10`). Nay: `_parse_packet` bỏ gói có `|vx|`, `|vy|` > `TRAJ_V_MAX` = 2 m/s hoặc `|wz|` > `TRAJ_W_MAX` = 10 rad/s [**đã chốt**, Liam 05/11 ở phiên CODE `local_3e4e7ed6…`, nguyên văn: "chốt giữ ngưỡng và chọn (A), nếu sau này cần xét lại (B) thì bạn hãy đề xuất tiếp, còn giờ chốt A"; rộng hơn giới hạn vật lý của xe, bánh 34,56 rad/s × r 0,0485 m ≈ 1,68 m/s, quay ≈ 7 rad/s; lệnh lớn nhất đang dùng: O1 0,8 m/s, S02 0,5 m/s, 0,5 rad/s]; `wrap_pi` dùng `remainderf` khi `|a|` > 4π (giá trị thường vẫn qua vòng `while` như trước). Bỏ gói thì lệnh tốt cũ giữ tới hết hạn (14.7.3). *(v2.6, Codex vòng 3 R4)* Gói bị bỏ vì ngoài miền tính vào `g_uart_bad` như gói sai checksum; log ghi "bad packet (checksum/range)".

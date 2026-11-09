@@ -5,8 +5,29 @@
 
 #include "BNO08xSH2HAL.hpp"
 #include "BNO08x.hpp"
+#include "BNO08xTrace.h" // empty unless -DBNO_TRACE (thesis trace envs, 28/10/2026)
+
+#ifdef BNO_TRACE
+static inline uint32_t bt_now()
+{
+    return (uint32_t) esp_timer_get_time();
+}
+#endif
 
 BNO08x* BNO08xSH2HAL::imu;
+
+// AGV_MECANUM (28/10/2026, spec controller-IMU v2.2 §3): báo ứng dụng mỗi lần chip SH2_RESET.
+// Bản thật ở src/imu/imu.cpp (tăng reset_n); bản weak này chỉ để thư viện link được một mình.
+extern "C" __attribute__((weak)) void imu_note_chip_reset(void) {}
+// AGV_MECANUM (29/10/2026, spec S06 v3.4 V4-2, Y13): host reset count stamped on each report as it is
+// received, and drops counted per layer (1 = queue_rx_sensor_event full, 2 = queue_cb_report_id full).
+extern "C" __attribute__((weak)) uint32_t imu_hal_reset_count(void) { return 0; }
+extern "C" __attribute__((weak)) void imu_note_lib_drop(int layer) { (void)layer; }
+// AGV_MECANUM (29/10/2026, Liam: "đếm ở cổng SPI"): mỗi report tại cổng nhận, trước update_data.
+extern "C" __attribute__((weak)) void imu_note_rx_report(uint8_t rpt_id, uint8_t seq, uint32_t epoch, int queued)
+{
+    (void)rpt_id; (void)seq; (void)epoch; (void)queued;
+}
 
 /**
  * @brief Sets the BNO08x driver object to be used with sh2 HAL lib callbacks.
@@ -61,6 +82,19 @@ int BNO08xSH2HAL::spi_read(sh2_Hal_t* self, uint8_t* pBuffer, unsigned len, uint
     if (!spi_wait_for_int())
         return 0;
 
+#ifdef BNO_TRACE
+    uint8_t bt_flags = 0;
+    uint16_t bt_delay = bno_trace_take_host_delay();
+    if (bt_delay)
+    {
+        vTaskDelay(pdMS_TO_TICKS(bt_delay));
+        bt_flags |= BT_F_DELAYED;
+    }
+    if (gpio_get_level(imu->imu_config.io_int) == 0)
+        bt_flags |= BT_F_INT_LOW;
+    uint32_t bt_cs = bt_now();
+#endif
+
     // assert chip select
     gpio_set_level(imu->imu_config.io_cs, 0);
 
@@ -69,6 +103,9 @@ int BNO08xSH2HAL::spi_read(sh2_Hal_t* self, uint8_t* pBuffer, unsigned len, uint
     if ((packet_sz > len) || (packet_sz == 0))
     {
         gpio_set_level(imu->imu_config.io_cs, 1);
+#ifdef BNO_TRACE
+        bno_trace_rec(BT_RD, (uint16_t) (bt_now() - bt_cs), packet_sz, bt_flags | BT_F_FAIL, pBuffer, 4, bt_cs);
+#endif
         return 0;
     }
 
@@ -76,6 +113,12 @@ int BNO08xSH2HAL::spi_read(sh2_Hal_t* self, uint8_t* pBuffer, unsigned len, uint
 
     // de-assert chip select
     gpio_set_level(imu->imu_config.io_cs, 1);
+
+#ifdef BNO_TRACE
+    // the body read clocks packet_sz bytes after the 4-byte header, so 4 + packet_sz bytes are on the wire
+    bno_trace_rec(BT_RD, (uint16_t) (bt_now() - bt_cs), PARSE_PACKET_LENGTH(pBuffer) & ~0x8000U,
+            bt_flags | (packet_sz ? 0 : BT_F_FAIL), pBuffer, packet_sz ? (uint16_t) (packet_sz + 4) : 4, bt_cs);
+#endif
 
     return packet_sz;
 }
@@ -102,13 +145,27 @@ int BNO08xSH2HAL::spi_write(sh2_Hal_t* self, uint8_t* pBuffer, unsigned len)
     imu->spi_transaction.rx_buffer = NULL;
     imu->spi_transaction.flags = 0;
 
+#ifdef BNO_TRACE
+    uint8_t bt_flags = (gpio_get_level(imu->imu_config.io_int) == 0) ? BT_F_INT_LOW : 0;
+    uint32_t bt_cs = bt_now();
+#endif
+
     gpio_set_level(imu->imu_config.io_cs, 0);                         // assert chip select
 
     // send data packet
     if(spi_device_polling_transmit(imu->spi_hdl, &imu->spi_transaction) != ESP_OK)
+    {
+#ifdef BNO_TRACE
+        bno_trace_rec(BT_WR, (uint16_t) (bt_now() - bt_cs), len, bt_flags | BT_F_FAIL, pBuffer, len, bt_cs);
+#endif
         return 0;
+    }
 
     gpio_set_level(imu->imu_config.io_cs, 1);                         // de-assert chip select
+
+#ifdef BNO_TRACE
+    bno_trace_rec(BT_WR, (uint16_t) (bt_now() - bt_cs), len, bt_flags, pBuffer, len, bt_cs);
+#endif
 
     return len;
 }
@@ -141,7 +198,10 @@ uint32_t BNO08xSH2HAL::get_time_us(sh2_Hal_t* self)
 void BNO08xSH2HAL::hal_cb(void* cookie, sh2_AsyncEvent_t* pEvent)
 {
     if (pEvent->eventId == SH2_RESET)
+    {
+        imu_note_chip_reset();   // AGV_MECANUM: reset_n cho controller (spec controller-IMU v2.2 §3)
         xEventGroupSetBits(imu->sync_ctx.evt_grp_task, BNO08xPrivateTypes::EVT_GRP_BNO08x_TASK_RESET_OCCURRED);
+    }
 }
 
 /**
@@ -154,7 +214,16 @@ void BNO08xSH2HAL::hal_cb(void* cookie, sh2_AsyncEvent_t* pEvent)
  */
 void BNO08xSH2HAL::sensor_event_cb(void* cookie, sh2_SensorEvent_t* event)
 {
-    xQueueSend(imu->queue_rx_sensor_event, event, 0);
+    // AGV_MECANUM: reset count read here, not in the app callback, because a report queued before
+    // a reset notice may be handled after reset_n has already been increased (spec S06 v3.4 V4-2).
+    BNO08xPrivateTypes::bno08x_rx_evt_t rx;
+    rx.evt = *event;
+    rx.reset_n = imu_hal_reset_count();
+    int queued = xQueueSend(imu->queue_rx_sensor_event, &rx, 0) == pdTRUE;
+    if (!queued)
+        imu_note_lib_drop(1);
+    // sequence = byte 1 của report (như sh2_decodeSensorEvent, sh2_SensorValue.c:86)
+    imu_note_rx_report(event->reportId, event->report[1], rx.reset_n, queued);
 }
 
 /**
@@ -176,6 +245,9 @@ bool BNO08xSH2HAL::spi_wait_for_int()
 {
     if (imu->wait_for_hint() != ESP_OK)
     {
+#ifdef BNO_TRACE
+        bno_trace_rec(BT_TMO, 0, 0, 0, nullptr, 0, bt_now());
+#endif
         hardware_reset();
         return false;
     }
