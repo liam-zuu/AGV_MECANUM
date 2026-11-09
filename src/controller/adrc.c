@@ -11,9 +11,13 @@ static const char *TAG = "ADRC";
 // Mô hình mỗi kênh: dv/dt ≈ b0*u + f, u = lệnh vận tốc thân đưa vào IK → PWM
 // (kinematics_radps_to_pwm: pwm = w/W_MAX*PWM_MAX, nên hệ số tĩnh u → v ≈ 1).
 // b0 = 1/tau. tau lấy từ plant motor DC dùng tham số đo ở S01 run01
-// (05_DATA/results/S01/2026-10-20_run01), xe trên sàn, đáp ứng bậc lệnh hở:
-//   vx, vy: tau ≈ 0.17 s → b0 ≈ 5.9 1/s
-//   wz:     tau ≈ 0.10 s → b0 ≈ 10 1/s
+// (05_DATA/results/S01/2026-10-20_run01), xe trên sàn, đáp ứng bậc lệnh hở (thời điểm đạt 63 %
+// giá trị xác lập; plant 'traction', duty = IK của lệnh / W_MAX như kinematics_radps_to_pwm):
+//   vx, vy: tau = 0.171 s → b0 = 5.85 1/s   (lệnh 0.3 và 0.5 m/s cùng tau)
+//   wz:     tau = 0.097 s → b0 = 10.3 1/s   (lệnh 1 và 2 rad/s cùng tau)
+// [09/11/2026: tính lại với khối lượng cân M = 4.12 kg (Liam), Iz tính từ M, mu_hd 0.436 (MU_FLOOR
+//  2026-11-09_run02); bản trước 5.9 / 10 tính ở M = 4.0 kg (mô phỏng lại 09/11: 0.168 s → 5.95,
+//  0.096 s → 10.4). Liam 09/11, phiên CODE: "Sửa luôn bây giờ".]
 // (S01 đo kê bánh, chỉ có quán tính bánh: tau ≈ 0.075 s → b0 ≈ 13.)
 // Bản cũ đặt b0 = 1/M, 1/J (đơn vị lực/mô-men), sai với u là vận tốc.
 //
@@ -26,13 +30,13 @@ static const char *TAG = "ADRC";
 
 // vx / vy — translational
 #define ADRC_VXY_OMEGA_O    30.0f
-#define ADRC_VXY_B0         5.9f
+#define ADRC_VXY_B0         5.85f
 #define ADRC_VXY_KP         8.0f            // omega_c
 #define ADRC_VXY_OUT_LIMIT  1.6f            // m/s
 
 // wz — rotational
 #define ADRC_WZ_OMEGA_O     30.0f
-#define ADRC_WZ_B0          10.0f
+#define ADRC_WZ_B0          10.3f
 #define ADRC_WZ_KP          8.0f
 #define ADRC_WZ_OUT_LIMIT   6.5f            // rad/s
 
