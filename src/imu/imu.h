@@ -18,8 +18,14 @@
 // nhận được ít nhất IMU_INIT_MIN_REPORTS report gyro VÀ game RV. [ĐỀ XUẤT 2 s, 3 mẫu]
 // Chỉ đếm report dùng được (gyro hữu hạn và |gz| < IMU_GYRO_SAT_RADPS; game RV hữu hạn), sau
 // lần reset chip gần nhất (Codex ctrl-imu #13, Liam duyệt 28/10).
+// T_init 2000 -> 4000 ms (Liam 10/11, phiên CODE local_69fa8ade, chọn "Nâng hạn lên 4 s"):
+// BNO085 thật trên xe (AGV 408d44b, env imu_log_20) gửi report gyro đầu tiên khoảng 1,8 s sau
+// khi imu_init() bắt đầu (G đầu ở t = 2,118 s từ lúc boot), cần 3 report nên quá hạn 2 s
+// (IMU INIT FAIL 3, init_ms=2002); 4 s là gấp đôi số đo. Đủ report thì vòng chờ thoát ngay,
+// nên chỉ lúc lỗi mới chờ đủ 4 s. Giả lập BNO085 của H7 khởi động nhanh hơn nên bàn HIL
+// không thấy lỗi này.
 #ifndef IMU_INIT_TIMEOUT_MS
-#define IMU_INIT_TIMEOUT_MS 2000
+#define IMU_INIT_TIMEOUT_MS 4000
 #endif
 #ifndef IMU_INIT_MIN_REPORTS
 #define IMU_INIT_MIN_REPORTS 3
