@@ -1,6 +1,7 @@
 #include "logger.h"
 #include "../fw_id_gen.h"      // FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV: scripts/build_id.py sinh lúc build
 #include "wifi/wifi.h"
+#include "gain_set.h"
 #include "esp_log.h"
 #include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
@@ -56,6 +57,26 @@ void logger_push(const log_data_t *data) {
 void logger_push_fw(void) {
     if (log_queue == NULL) return;
     log_data_t d = { .kind = LOG_KIND_FW };
+    (void)xQueueSend(log_queue, &d, 0);
+}
+
+// Dòng #gain (L90): bộ gain chụp lúc gọi (cùng task áp gain, control_task), logger_task in bản chụp.
+// Một bản chụp: hai dòng #gain còn trong hàng đợi thì cả hai in bản mới nhất (áp gain chỉ khi motor
+// tắt, cách lần đẩy ở đầu lượt ít nhất một lượt, nên thực tế không chồng).
+static portMUX_TYPE s_gain_mux = portMUX_INITIALIZER_UNLOCKED;
+static gain_set_t   s_gain_snap;
+static uint32_t     s_gain_applied_n;
+
+void logger_push_gain(void) {
+    if (log_queue == NULL) return;
+    gain_set_t g;
+    gain_set_current(&g);
+    uint32_t n = gain_set_applied_n();
+    taskENTER_CRITICAL(&s_gain_mux);
+    s_gain_snap = g;
+    s_gain_applied_n = n;
+    taskEXIT_CRITICAL(&s_gain_mux);
+    log_data_t d = { .kind = LOG_KIND_GAIN };
     (void)xQueueSend(log_queue, &d, 0);
 }
 
@@ -136,6 +157,20 @@ void logger_task(void *pv) {
         if (data.kind == LOG_KIND_FW) {
             // Nhận dạng firmware (Liam 09/11): '#' nên PC tách khỏi CSV, vào file events
             int n = snprintf(buf, sizeof(buf), "#fw,sha=%s,dirty=%d,env=%s\n", FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV);
+            if (sendto(sock, buf, n, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0)
+                s_log_send_err++;
+            continue;
+        }
+        if (data.kind == LOG_KIND_GAIN) {
+            gain_set_t g;
+            uint32_t   n_applied;
+            taskENTER_CRITICAL(&s_gain_mux);
+            g = s_gain_snap;
+            n_applied = s_gain_applied_n;
+            taskEXIT_CRITICAL(&s_gain_mux);
+            int n = snprintf(buf, sizeof(buf), "#gain");
+            n += gain_set_format(buf + n, sizeof(buf) - (size_t)n - 1, &g, n_applied);
+            buf[n++] = '\n';
             if (sendto(sock, buf, n, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0)
                 s_log_send_err++;
             continue;

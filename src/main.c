@@ -14,6 +14,7 @@
 #include "imu/imu.h"
 #include "led_buzzer/led_buzzer.h"
 #include "traj_receiver/traj_receiver.h"
+#include "gain_rx/gain_rx.h"
 #include "ultrasonic/ultrasonic.h"
 #include "manual_control/manual_control.h"
 #include "controller/vel_ctrl.h"
@@ -331,6 +332,8 @@ static void run_udp_mark(void) {
     s_run_udp_take0 = s.udp_take;
     // Nhận dạng firmware vào log UDP của lượt (Liam 09/11): 3 bản như #run_end, phòng mất gói
     for (int i = 0; i < 3; i++) logger_push_fw();
+    // Bộ gain đang chạy vào log của lượt (L90): lượt dùng gain nào đọc được từ log
+    for (int i = 0; i < 3; i++) logger_push_gain();
 }
 
 // Hết lượt (motor bật → tắt): dòng tổng kết gửi 3 lần; tick mang log_seq của dòng dữ liệu cuối
@@ -552,6 +555,16 @@ static void control_task(void *pv) {
         };
         vel_ctrl_out_t vc = vel_ctrl_step(&vin);
 
+        // ── 10a. Đổi gain qua WiFi (L90, Liam 12/11): chỉ khi motor tắt. Motor tắt thì kết quả
+        //         vel_ctrl_step của tick này không dùng (bước 6), nên áp sau bước 8–10 là an toàn;
+        //         motor bật thì từ chối, không giữ chờ. Không in serial ở đây (gain_rx in).
+        gain_set_t gain_req;
+        if (gain_rx_poll(&gain_req)) {
+            int gain_err = g_motor_enabled ? GAIN_ERR_MOTOR_ON : gain_set_apply(&gain_req);
+            gain_rx_done(gain_req.id, gain_err);
+            if (gain_err == GAIN_OK) logger_push_gain();
+        }
+
         static bool s_motor_prev = false;
         static int  s_idle_div   = 0;
         if (!g_motor_enabled) {
@@ -639,6 +652,7 @@ void app_main(void) {
     ultrasonic_init();
     traj_receiver_init();
     logger_init();
+    gain_rx_init();            // đổi gain qua WiFi, UDP 5014 (L90)
 #ifdef S06_LOAD
     s06_init();
 #endif
@@ -648,6 +662,14 @@ void app_main(void) {
     ESP_LOGI(TAG, "Controller: %s", CTRL_MODE == CTRL_PID ? "PID" : "ADRC");
     // Nhận dạng firmware (Liam 09/11, phiên CODE): meta.yaml ghi theo dòng này, không theo HEAD trên PC
     ESP_LOGI(TAG, "#fw sha=%s dirty=%d env=%s", FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV);
+    {
+        // Bộ gain lúc khởi động (id=0 = gain build sẵn; L90)
+        char gbuf[256];
+        gain_set_t g0;
+        gain_set_current(&g0);
+        gain_set_format(gbuf, sizeof(gbuf), &g0, gain_set_applied_n());
+        ESP_LOGI(TAG, "#gain%s", gbuf);
+    }
 
     motor_enable(false);
     g_us_mutex = xSemaphoreCreateMutex();

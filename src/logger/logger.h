@@ -91,6 +91,7 @@ typedef struct {
 #define LOG_KIND_DATA    0
 #define LOG_KIND_RUN_END 1
 #define LOG_KIND_FW      2   // dòng "#fw,sha=..,dirty=..,env=.." (fw_id_gen.h), gửi ở đầu mỗi lượt
+#define LOG_KIND_GAIN    3   // dòng "#gain,id=..,applied_n=..,ctrl=..,<7 gain>" (L90): khi áp, đầu mỗi lượt
 
 // ─────────────────────────────────────────
 // API
@@ -99,6 +100,7 @@ void logger_init(void);
 void logger_push(const log_data_t *data);   // non-blocking, gọi từ control_task; điền log_seq, log_qdrop
 uint32_t logger_seq(void);                  // log_seq của dòng push gần nhất
 void logger_push_fw(void);                  // dòng #fw qua UDP; không lấy log_seq (logger.c)
+void logger_push_gain(void);                // dòng #gain (bộ gain đang chạy, chụp lúc gọi); như #fw
 uint32_t logger_qdrop(void);
 uint32_t logger_send_err(void);
 void logger_task(void *pv);                 // tạo task trong app_main, core 0
