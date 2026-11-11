@@ -238,7 +238,7 @@ static void encoder_task(void *pv) {
 // Log 100 Hz (motor bật) / 10 Hz (motor tắt): cột cũ + cột IMU, mất log (spec controller–IMU v2.2 §8)
 // ─────────────────────────────────────────
 static void push_log(int64_t t_now, agv_velocity_t vel, const vel_ctrl_out_t *vc,
-                     const int pwm[4], const imu_data_t *imu, bool motor_on) {
+                     const int pwm[4], const imu_data_t *imu, bool motor_on, int32_t traj_age_ms) {
     const imu_fusion_out_t *m = &vc->imu;
     const heading_out_t    *h = &vc->head;
     log_data_t d = {
@@ -317,6 +317,7 @@ static void push_log(int64_t t_now, agv_velocity_t vel, const vel_ctrl_out_t *vc
         .ws_flag     = vc->wslip.flag,
         .ws_on_count = vc->wslip.on_count,
         .ws_eval     = vc->wslip.eval,
+        .traj_age_ms = traj_age_ms,
     };
     logger_push(&d);
 }
@@ -477,6 +478,10 @@ static void control_task(void *pv) {
         taskEXIT_CRITICAL(&g_traj_mux);
         bool traj_fresh  = (traj_us > 0) &&
                            ((t_now - traj_us) < TRAJ_TIMEOUT_US);
+        // Tuổi gói lệnh cuối cho log (RB-4, 12/11): −1 khi chưa có gói; kẹp ở INT32_MAX
+        int64_t traj_age_us = (traj_us > 0) ? (t_now - traj_us) : -1000LL;
+        if (traj_age_us > 2147483647000LL) traj_age_us = 2147483647000LL;
+        int32_t traj_age_ms = (traj_us > 0) ? (int32_t)(traj_age_us / 1000LL) : -1;
 
         if (swc_manual) {
             g_mode = MODE_MANUAL;
@@ -575,7 +580,7 @@ static void control_task(void *pv) {
             if (++s_idle_div >= 10) {                         // dòng nhịp thưa 10 Hz khi motor tắt
                 s_idle_div = 0;
                 const int pwm0[4] = {0, 0, 0, 0};
-                push_log(t_now, vel, &vc, pwm0, &s_imu, false);
+                push_log(t_now, vel, &vc, pwm0, &s_imu, false, traj_age_ms);
             }
             continue;
         }
@@ -618,7 +623,7 @@ static void control_task(void *pv) {
         // ── 12. Push log ──────────────────────────────────────────────────────
         const int pwm_out[4] = { pwm_fl, pwm_fr, pwm_rl, pwm_rr };
         vel_ctrl_applied(pwm_out, &vc);   // đứng yên + bộ đếm theo PWM thực áp (Codex ctrl-imu #12)
-        push_log(t_now, vel, &vc, pwm_out, &s_imu, true);
+        push_log(t_now, vel, &vc, pwm_out, &s_imu, true, traj_age_ms);
     }
 }
 

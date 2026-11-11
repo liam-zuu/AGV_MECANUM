@@ -86,6 +86,10 @@ typedef struct {
     float    ws_res, ws_th;    // [count] phần dư, ngưỡng trong cửa sổ
     uint8_t  ws_flag, ws_eval;
     uint32_t ws_on_count;
+    // Thêm 12/11 (RB-4 R128, Liam 12/11 "Thêm luôn"; cùng bản L90): tuổi gói lệnh quỹ đạo cuối
+    // [ms] = (thời điểm tick − thời điểm NHẬN gói cuối) / 1000, lấy ở mỗi tick 10 ms; −1 khi chưa có
+    // gói nào từ lúc khởi động. Cột cuối để cột cũ giữ chỗ (tools/agv_logger.py COLUMNS, 86 cột).
+    int32_t  traj_age_ms;
 } log_data_t;
 
 #define LOG_KIND_DATA    0
