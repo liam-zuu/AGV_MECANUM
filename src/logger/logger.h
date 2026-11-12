@@ -101,6 +101,7 @@ typedef struct {
     us_run_t   us;
     uint8_t    us_ev;            // US_EV_START / US_EV_CHANGE / US_EV_END (us_state.h)
     uint32_t   us_seq;           // first_seq (start, change) hoặc last_data_seq (end)
+    uint32_t   us_drop;          // số sự kiện #us/#us_end mất trước sự kiện này, chụp lúc đưa vào hàng đợi
 } log_data_t;
 
 #define LOG_KIND_DATA    0
@@ -117,7 +118,7 @@ void logger_push(const log_data_t *data);   // non-blocking, gọi từ control_
 uint32_t logger_seq(void);                  // log_seq của dòng push gần nhất
 void logger_push_fw(void);                  // dòng #fw qua UDP; không lấy log_seq (logger.c)
 void logger_push_gain(uint32_t first_seq);  // dòng #gain (bộ gain đang chạy, chụp lúc gọi, trong control_task); như #fw
-void logger_push_us(int ev, const us_run_t *r, uint32_t ev_seq);  // dòng #us / #us_end (L95); như #fw
+void logger_push_us(int ev, const us_run_t *r, uint32_t ev_seq);  // #us / #us_end (L95): 1 phần tử, phát 3 bản
 uint32_t logger_seq_next(void);             // log_seq dòng dữ liệu kế tiếp sẽ lấy
 uint32_t logger_qdrop(void);
 uint32_t logger_send_err(void);

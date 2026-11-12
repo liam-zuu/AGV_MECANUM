@@ -1,5 +1,7 @@
 #include "ibus.h"
+#include "ibus_age.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -17,6 +19,9 @@ portMUX_TYPE      g_ibus_mux          = portMUX_INITIALIZER_UNLOCKED;
 ibus_data_t       g_ibus_data         = {0};
 int               g_ibus_failsafe_count = 0;
 static uint32_t   s_gap_count         = 0;   // 20 ms without a byte right after a valid frame
+// esp_timer of the last checksum-valid frame, 0 = none yet (L95-1: ibus_get() checks its age, so a
+// stream of bytes that never forms a frame cannot keep an old frame valid). Under g_ibus_mux.
+static int64_t    s_last_ok_us        = 0;
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 void ibus_init(void) {
@@ -143,11 +148,13 @@ void ibus_task(void *pvParam) {
                     // Đủ 32 byte → parse
                     ibus_data_t tmp = {0};
                     bool ok = _parse_packet(buf, &tmp);
+                    int64_t t_ok = esp_timer_get_time();
 
                     taskENTER_CRITICAL(&g_ibus_mux);
                     if (ok) {
                         g_ibus_data           = tmp;
                         g_ibus_failsafe_count = 0;
+                        s_last_ok_us          = t_ok;
                     } else {
                         g_ibus_data.valid = false;
                         g_ibus_failsafe_count++;
@@ -164,7 +171,11 @@ void ibus_task(void *pvParam) {
 bool ibus_get(ibus_data_t *out) {
     taskENTER_CRITICAL(&g_ibus_mux);   // never fails: no "RC lost" from lock contention
     *out = g_ibus_data;
+    int64_t last_ok = s_last_ok_us;
+    int64_t now     = esp_timer_get_time();   // read after the copy, under the lock: now >= last_ok
     taskEXIT_CRITICAL(&g_ibus_mux);
+    // L95-1: the last valid frame must be recent (ibus_age.h), not only "some byte within 20 ms"
+    if (out->valid && !ibus_frame_fresh(now, last_ok)) out->valid = false;
     return out->valid;
 }
 

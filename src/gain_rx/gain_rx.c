@@ -136,6 +136,8 @@ static void gain_rx_task(void *pv) {
     }
 }
 
+uint32_t gain_rx_boot_id(void) { return s_boot; }
+
 void gain_rx_init(void) {
     s_boot = esp_random();
     s_req = xQueueCreate(1, sizeof(gain_req_t));

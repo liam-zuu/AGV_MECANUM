@@ -33,5 +33,7 @@ bool gain_rx_poll(gain_req_t *req);
 // control_task: kết quả của yêu cầu vừa lấy; gọi trong control_task nên bản chụp gain đi kèm
 // (gain_set_current) không đọc lúc đang áp.
 void gain_rx_done(const gain_req_t *req, int err);
+// Mã khởi động ngẫu nhiên (đặt trong gain_rx_init, đổi mỗi lần boot), cũng ở #gain_ack; L95-8 ghi vào #us
+uint32_t gain_rx_boot_id(void);
 
 #endif
