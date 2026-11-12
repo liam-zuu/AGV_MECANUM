@@ -27,6 +27,15 @@ bool us_run_tick(us_run_t *r, bool on, int32_t swb, bool any_blocked, bool cut) 
     return changed;
 }
 
+int us_queue_need(int ev) {
+    switch (ev) {
+    case US_EV_START:
+    case US_EV_CHANGE: return 2;   // sự kiện + dòng dữ liệu cùng tick
+    case US_EV_END:    return 4;   // sự kiện + 3 #run_end
+    default:           return 0;
+    }
+}
+
 int us_format_line(char *buf, size_t n, int ev, const us_run_t *r, uint32_t ev_seq, uint32_t line_drop) {
     if (buf == NULL || n == 0 || r == NULL) return -1;
     switch (ev) {

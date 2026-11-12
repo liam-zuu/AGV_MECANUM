@@ -81,6 +81,11 @@ static uint32_t s_us_drop;
 
 void logger_push_us(int ev, const us_run_t *r, uint32_t ev_seq) {
     if (log_queue == NULL || r == NULL) return;
+    // L95-R2-1: chừa chỗ cho dòng dữ liệu / #run_end đi sau (us_state.h mục (d)). Mọi phần tử của hàng đợi
+    // đều do control_task đưa vào, logger_task chỉ lấy ra, nên chỗ trống đọc ở đây không giảm trước lần
+    // đưa vào kế tiếp của chính task này.
+    int need = us_queue_need(ev);
+    if (need <= 0 || (int)uxQueueSpacesAvailable(log_queue) < need) { s_us_drop++; return; }
     log_data_t d = { .kind = LOG_KIND_US, .us = *r, .us_ev = (uint8_t)ev, .us_seq = ev_seq, .us_drop = s_us_drop };
     if (xQueueSend(log_queue, &d, 0) != pdTRUE) s_us_drop++;
 }

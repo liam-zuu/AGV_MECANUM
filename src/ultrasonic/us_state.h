@@ -26,9 +26,21 @@
 //     không thấy các điểm kẹp bên trong vel_ctrl/pos_ctrl, và env s06_load ghi đè PWM sau đó, L95-5).
 //     line_drop: số SỰ KIỆN #us/#us_end không vào được hàng đợi tính tới trước sự kiện này (chụp lúc
 //     đưa vào hàng đợi, tích lũy từ lúc khởi động).
-// (c) Luật cho bộ chấm (chưa viết; L95-4, L95-5, L95-8): lượt được coi là "không bị interlock siêu âm" chỉ
-//     khi có #us,ev=start và #us_end cùng boot, khớp khoảng first_seq..last_data_seq của lượt, on=0 ở
-//     start, changes=0, và blk_ticks=0. Thiếu, mâu thuẫn hay mơ hồ thì là thiếu bằng chứng.
+// (c) Luật cho bộ chấm (chưa viết; L95-4, L95-5, L95-8, L95-R2-2): lượt được coi là "không bị interlock
+//     siêu âm" chỉ khi đủ cả:
+//     - boot của #us/#us_end gắn DUY NHẤT với chính dữ liệu của lượt (CSV, #run_end không mang boot): cùng
+//       một lần khởi động theo log serial ESP32 của buổi (không có reset giữa) hay #fw + #gain_ack cùng boot;
+//       chưa gắn được là mơ hồ;
+//     - có #us,ev=start và #us_end cùng boot; bản sao giống hệt gộp thành một sự kiện, bản khác nội dung
+//       của cùng sự kiện là xung đột;
+//     - first_seq, last_data_seq khớp hai cạnh motor của lượt (seq dự định, xét cả dòng dữ liệu mất),
+//       ticks > 0 và ticks = last_data_seq − first_seq + 1;
+//     - on=0 ở start, changes=0, on=0 ở end, không có #us,ev=change trong khoảng lượt;
+//     - blk_ticks=0 (cut_ticks không dùng để quyết).
+//     Thiếu, mâu thuẫn hay mơ hồ thì là thiếu bằng chứng. line_drop lịch sử khác 0 tự nó không làm hỏng lượt.
+// (d) Chỗ trong hàng đợi logger (L95-R2-1): sự kiện chỉ được đưa vào khi hàng đợi còn ít nhất
+//     us_queue_need(ev) chỗ: start, change cần 2 (chính nó + dòng dữ liệu của tick đó), end cần 4 (chính nó +
+//     3 #run_end). Không đủ thì bỏ sự kiện và tăng line_drop, không lấy chỗ của dòng dữ liệu hay #run_end.
 // Không đổi phép tính của controller: chỉ đọc cờ và đếm.
 // ─────────────────────────────────────────
 
@@ -57,5 +69,8 @@ bool us_run_tick(us_run_t *r, bool on, int32_t swb, bool any_blocked, bool cut);
 // Định dạng một dòng (kết thúc "\n") vào buf. ev_seq: first_seq (start, change) hoặc last_data_seq
 // (end). Trả số byte (không kể '\0'); < 0 hay >= n là lỗi (dòng không gửi).
 int us_format_line(char *buf, size_t n, int ev, const us_run_t *r, uint32_t ev_seq, uint32_t line_drop);
+
+// Số chỗ trống hàng đợi logger cần có trước khi đưa sự kiện ev vào (mục (d)); ev lạ: 0 (không đưa vào).
+int us_queue_need(int ev);
 
 #endif // US_STATE_H
