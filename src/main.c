@@ -16,6 +16,7 @@
 #include "traj_receiver/traj_receiver.h"
 #include "gain_rx/gain_rx.h"
 #include "ultrasonic/ultrasonic.h"
+#include "ultrasonic/us_state.h"
 #include "manual_control/manual_control.h"
 #include "controller/vel_ctrl.h"
 #include "tests/test_runner.h"
@@ -325,6 +326,8 @@ static void push_log(int64_t t_now, agv_velocity_t vel, const vel_ctrl_out_t *vc
 // Bộ đếm gói UDP lúc bắt đầu lượt: #run_end ghi phần tăng trong lượt (QĐ 6 bậc 1). Trên bàn HIL
 // udp_take > 0 nghĩa là có gói UDP đã vào điều khiển giữa lượt, lượt đó không hợp lệ.
 static uint32_t s_run_udp_drop0, s_run_udp_take0;
+// Trạng thái siêu âm của lượt (L95, us_state.h): chỉ control_task đọc/ghi
+static us_run_t s_us_run;
 
 static void run_udp_mark(void) {
     traj_snapshot_t s;
@@ -337,10 +340,15 @@ static void run_udp_mark(void) {
     // log_seq của dòng dữ liệu đầu lượt (push_log ngay sau hàm này, cùng tick) để gắn dòng vào lượt
     uint32_t first_seq = logger_seq_next();
     for (int i = 0; i < 3; i++) logger_push_gain(first_seq);
+    // Trạng thái siêu âm lúc motor bật (L95): cùng first_seq, 3 bản
+    us_run_begin(&s_us_run, g_obstacle_enabled);
+    for (int i = 0; i < 3; i++) logger_push_us(US_EV_START, &s_us_run, first_seq);
 }
 
 // Hết lượt (motor bật → tắt): dòng tổng kết gửi 3 lần; tick mang log_seq của dòng dữ liệu cuối
 static void push_run_end(void) {
+    // Tổng kết siêu âm của lượt (L95) trước #run_end; last_data_seq = log_seq dòng dữ liệu cuối
+    for (int i = 0; i < 3; i++) logger_push_us(US_EV_END, &s_us_run, logger_seq());
     traj_snapshot_t s;
     traj_receiver_snapshot(&s);
     log_data_t d = { .kind = LOG_KIND_RUN_END, .tick = logger_seq(),
@@ -413,12 +421,10 @@ static void control_task(void *pv) {
                 }
 
 
-        // ── 2b. SWB — tắt/bật obstacle detection (chỉ hoạt động ở MANUAL) ───
-        if (has_rc && g_mode == MODE_MANUAL) {
-            g_obstacle_enabled = (rc.channel[CH_SWB] < 1500);
-        } else {
-            g_obstacle_enabled = true;
-        }
+        // ── 2b. SWB — tắt/bật obstacle detection ở MỌI chế độ (L95, Liam 12/11 "SWB + ghi log"; trước
+        //        đây chỉ MANUAL, AUTO luôn bật). Không có iBUS hợp lệ thì bật (us_state.c). Cờ chặn cũ
+        //        chỉ xóa ở lần cập nhật siêu âm kế (≤ khoảng 50 ms, bước 4); log đếm theo cờ thật.
+        g_obstacle_enabled = us_swb_enabled(has_rc, has_rc ? rc.channel[CH_SWB] : 0);
 
         // ── 3. SWD — buzzer (TODO: task riêng) ───────────────────────────────
 
@@ -549,6 +555,9 @@ static void control_task(void *pv) {
         bool intent_right = vel.vy < 0.0f;
 
         // ── 7c. Interlock ─────────────────────────────────────────────────────
+        // us_cut: tick này interlock đổi lệnh vận tốc (L95, chỉ để đếm vào #us_end)
+        bool us_cut = (s_front_blocked && vel.vx > 0.0f) || (s_back_blocked  && vel.vx < 0.0f) ||
+                      (s_left_blocked  && vel.vy > 0.0f) || (s_right_blocked && vel.vy < 0.0f);
         if (s_front_blocked && vel.vx > 0.0f) vel.vx = 0.0f;
         if (s_back_blocked  && vel.vx < 0.0f) vel.vx = 0.0f;
         if (s_left_blocked  && vel.vy > 0.0f) vel.vy = 0.0f;
@@ -626,6 +635,15 @@ static void control_task(void *pv) {
             (s_left_blocked  && (intent_left  || vc.v_cmd.vy > 0.0f)) ||
             (s_right_blocked && (intent_right || vc.v_cmd.vy < 0.0f)))) {
             pwm_fl = 0; pwm_fr = 0; pwm_rl = 0; pwm_rr = 0;
+            us_cut = true;
+        }
+
+        // ── 10c. Trạng thái siêu âm của lượt (L95): đếm mỗi tick motor bật; SWB đổi giữa lượt thì
+        //         3 dòng #us,ev=change, first_seq = dòng dữ liệu của chính tick này (bước 12)
+        bool us_blk = s_front_blocked || s_back_blocked || s_left_blocked || s_right_blocked;
+        if (us_run_tick(&s_us_run, g_obstacle_enabled, us_blk, us_cut)) {
+            uint32_t fs = logger_seq_next();
+            for (int i = 0; i < 3; i++) logger_push_us(US_EV_CHANGE, &s_us_run, fs);
         }
 
 #ifdef S06_LOAD

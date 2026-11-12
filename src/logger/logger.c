@@ -73,6 +73,16 @@ void logger_push_gain(uint32_t first_seq) {
     if (xQueueSend(log_queue, &d, 0) != pdTRUE) s_gain_line_drop++;
 }
 
+// Dòng #us / #us_end (L95): bản sao trạng thái lượt chụp lúc gọi (trong control_task); không lấy log_seq
+// (như #fw, #gain); line_drop đếm dòng không vào được hàng đợi (tích lũy).
+static volatile uint32_t s_us_line_drop;
+
+void logger_push_us(int ev, const us_run_t *r, uint32_t ev_seq) {
+    if (log_queue == NULL || r == NULL) return;
+    log_data_t d = { .kind = LOG_KIND_US, .us = *r, .us_ev = (uint8_t)ev, .us_seq = ev_seq };
+    if (xQueueSend(log_queue, &d, 0) != pdTRUE) s_us_line_drop++;
+}
+
 uint32_t logger_seq_next(void) { return s_log_seq + 1; }
 
 uint32_t logger_seq(void)      { return s_log_seq; }
@@ -164,6 +174,13 @@ void logger_task(void *pv) {
             n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",first_seq=%lu,line_drop=%lu\n",
                           (unsigned long)data.gain_first_seq, (unsigned long)s_gain_line_drop);
             if (n >= (int)sizeof(buf)) { s_log_send_err++; continue; }
+            if (sendto(sock, buf, n, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0)
+                s_log_send_err++;
+            continue;
+        }
+        if (data.kind == LOG_KIND_US) {
+            int n = us_format_line(buf, sizeof(buf), data.us_ev, &data.us, data.us_seq, s_us_line_drop);
+            if (n < 0 || n >= (int)sizeof(buf)) { s_log_send_err++; continue; }
             if (sendto(sock, buf, n, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0)
                 s_log_send_err++;
             continue;

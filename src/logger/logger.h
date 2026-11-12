@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "gain_set.h"
+#include "us_state.h"
 
 // ─────────────────────────────────────────
 // Config: log goes to the RPi5 of the HIL bench (Liam 08/11: "Về Pi cho mọi env")
@@ -96,12 +97,17 @@ typedef struct {
     gain_set_t gain;
     uint32_t   gain_applied_n;
     uint32_t   gain_first_seq;   // log_seq của dòng dữ liệu đầu lượt; 0 = dòng in lúc áp gain
+    // Chỉ dòng LOG_KIND_US (L95): bản sao trạng thái siêu âm của lượt lúc gọi, loại dòng, mốc seq
+    us_run_t   us;
+    uint8_t    us_ev;            // US_EV_START / US_EV_CHANGE / US_EV_END (us_state.h)
+    uint32_t   us_seq;           // first_seq (start, change) hoặc last_data_seq (end)
 } log_data_t;
 
 #define LOG_KIND_DATA    0
 #define LOG_KIND_RUN_END 1
 #define LOG_KIND_FW      2   // dòng "#fw,sha=..,dirty=..,env=.." (fw_id_gen.h), gửi ở đầu mỗi lượt
 #define LOG_KIND_GAIN    3   // dòng "#gain,id=..,applied_n=..,ctrl=..,<7 gain>" (L90): khi áp, đầu mỗi lượt
+#define LOG_KIND_US      4   // dòng "#us,.." / "#us_end,.." (L95, us_state.h): đầu lượt, khi SWB đổi, cuối lượt
 
 // ─────────────────────────────────────────
 // API
@@ -111,6 +117,7 @@ void logger_push(const log_data_t *data);   // non-blocking, gọi từ control_
 uint32_t logger_seq(void);                  // log_seq của dòng push gần nhất
 void logger_push_fw(void);                  // dòng #fw qua UDP; không lấy log_seq (logger.c)
 void logger_push_gain(uint32_t first_seq);  // dòng #gain (bộ gain đang chạy, chụp lúc gọi, trong control_task); như #fw
+void logger_push_us(int ev, const us_run_t *r, uint32_t ev_seq);  // dòng #us / #us_end (L95); như #fw
 uint32_t logger_seq_next(void);             // log_seq dòng dữ liệu kế tiếp sẽ lấy
 uint32_t logger_qdrop(void);
 uint32_t logger_send_err(void);
