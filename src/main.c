@@ -487,11 +487,13 @@ static void control_task(void *pv) {
                            ((t_now - traj_us) < TRAJ_TIMEOUT_US);
         // Tuổi gói lệnh cuối cho log (RB-4; sửa theo Codex L90-5, L90-6 ngày 12/11): thời điểm NHẬN gói lấy
         // thẳng từ receiver (gói UART hay UDP, kể cả đã hết hạn; không qua bước chuyển 10 ms của
-        // traj_task), mốc thời gian lấy ngay sau khi đọc bản chụp (receiver ghi t_rx_us trước khi commit
-        // dưới cùng khóa, nên hiệu không âm). −1 khi chưa có gói nào từ lúc khởi động.
+        // traj_task). RS-3 (Codex rà sớm R130, Liam 12/11 "Cho đổi"): mốc thời gian lấy TRƯỚC khi chụp gói.
+        // Thứ tự cũ (chụp rồi mới đọc giờ) làm tuổi cao hơn tuổi thật cả một chu kỳ gửi khi gói mới đến giữa
+        // hai lệnh; thứ tự này chỉ làm hiệu âm (gói đến sau mốc), kẹp về 0, sai số một chiều cỡ µs.
+        // −1 khi chưa có gói nào từ lúc khởi động.
+        int64_t t_age_ref = esp_timer_get_time();
         traj_snapshot_t rx_snap;
         traj_receiver_snapshot(&rx_snap);
-        int64_t t_age_ref = esp_timer_get_time();
         int32_t traj_age_ms = -1;
         if (rx_snap.t_rx_us > 0) {
             int64_t a = t_age_ref - rx_snap.t_rx_us;
