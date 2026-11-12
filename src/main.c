@@ -359,6 +359,10 @@ static void control_task(void *pv) {
     int64_t t_prev = esp_timer_get_time();
     bool    swa_prev = false;
     static imu_data_t s_imu;
+    // Thời điểm driver motor bị tắt lần gần nhất (esp_timer, đọc ngay sau motor_enable(false)); 0 = chưa
+    // bật lần nào từ lúc khởi động (app_main đã tắt driver trước khi task chạy). Gói gain nhận trước mốc
+    // này bị từ chối (L90-1; Codex vòng 2: không dùng t_now đầu tick làm mốc).
+    static int64_t s_motor_off_us = 0;
     bool    have_imu = false;
 
     while (1) {
@@ -405,6 +409,7 @@ static void control_task(void *pv) {
                 if (g_motor_enabled != swa_on) {
                     g_motor_enabled = swa_on;
                     motor_enable(swa_on);
+                    if (!swa_on) s_motor_off_us = esp_timer_get_time();   // sau khi driver đã tắt (L90-1)
                 }
 
 
@@ -574,13 +579,11 @@ static void control_task(void *pv) {
 
         // ── 10a. Đổi gain qua WiFi (L90, Liam 12/11): chỉ khi motor tắt. Motor tắt thì kết quả
         //         vel_ctrl_step của tick này không dùng (bước 6), nên áp sau bước 8–10 là an toàn;
-        //         motor bật thì từ chối, không giữ chờ. Gói NHẬN trước tick đầu tiên thấy motor tắt
-        //         cũng bị từ chối (Codex L90-1: gói tới giữa lượt, SWA tắt trước tick kế). #gain_get
-        //         chỉ đọc, trả lời cả khi motor bật. Không in serial ở đây (gain_rx in).
+        //         motor bật thì từ chối, không giữ chờ. Gói NHẬN trước lúc driver bị tắt
+        //         (s_motor_off_us, bước 2) cũng bị từ chối (Codex L90-1: gói tới giữa lượt, SWA tắt
+        //         trước tick kế). #gain_get chỉ đọc, trả lời cả khi motor bật. Không in serial ở đây.
         static bool    s_motor_prev = false;
         static int     s_idle_div   = 0;
-        static int64_t s_motor_off_us = 0;      // t_now của tick đầu tiên thấy motor tắt sau một lượt
-        if (!g_motor_enabled && s_motor_prev) s_motor_off_us = t_now;
         gain_req_t gain_req;
         if (gain_rx_poll(&gain_req)) {
             int gain_err = GAIN_OK;
