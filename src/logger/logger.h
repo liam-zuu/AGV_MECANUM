@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "gain_set.h"
 
 // ─────────────────────────────────────────
 // Config: log goes to the RPi5 of the HIL bench (Liam 08/11: "Về Pi cho mọi env")
@@ -90,6 +91,11 @@ typedef struct {
     // [ms] = (thời điểm tick − thời điểm NHẬN gói cuối) / 1000, lấy ở mỗi tick 10 ms; −1 khi chưa có
     // gói nào từ lúc khởi động. Cột cuối để cột cũ giữ chỗ (tools/agv_logger.py COLUMNS, 86 cột).
     int32_t  traj_age_ms;
+    // Chỉ dòng LOG_KIND_GAIN (L90; Codex vòng 1 L90-2, L90-4): bản sao bộ gain của chính dòng này
+    // (không dùng bản chụp chung), số lần áp, mốc lượt. Không in vào dòng CSV dữ liệu.
+    gain_set_t gain;
+    uint32_t   gain_applied_n;
+    uint32_t   gain_first_seq;   // log_seq của dòng dữ liệu đầu lượt; 0 = dòng in lúc áp gain
 } log_data_t;
 
 #define LOG_KIND_DATA    0
@@ -104,7 +110,8 @@ void logger_init(void);
 void logger_push(const log_data_t *data);   // non-blocking, gọi từ control_task; điền log_seq, log_qdrop
 uint32_t logger_seq(void);                  // log_seq của dòng push gần nhất
 void logger_push_fw(void);                  // dòng #fw qua UDP; không lấy log_seq (logger.c)
-void logger_push_gain(void);                // dòng #gain (bộ gain đang chạy, chụp lúc gọi); như #fw
+void logger_push_gain(uint32_t first_seq);  // dòng #gain (bộ gain đang chạy, chụp lúc gọi, trong control_task); như #fw
+uint32_t logger_seq_next(void);             // log_seq dòng dữ liệu kế tiếp sẽ lấy
 uint32_t logger_qdrop(void);
 uint32_t logger_send_err(void);
 void logger_task(void *pv);                 // tạo task trong app_main, core 0

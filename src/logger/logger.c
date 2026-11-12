@@ -60,25 +60,20 @@ void logger_push_fw(void) {
     (void)xQueueSend(log_queue, &d, 0);
 }
 
-// Dòng #gain (L90): bộ gain chụp lúc gọi (cùng task áp gain, control_task), logger_task in bản chụp.
-// Một bản chụp: hai dòng #gain còn trong hàng đợi thì cả hai in bản mới nhất (áp gain chỉ khi motor
-// tắt, cách lần đẩy ở đầu lượt ít nhất một lượt, nên thực tế không chồng).
-static portMUX_TYPE s_gain_mux = portMUX_INITIALIZER_UNLOCKED;
-static gain_set_t   s_gain_snap;
-static uint32_t     s_gain_applied_n;
+// Dòng #gain (L90): mỗi phần tử hàng đợi mang bản sao bộ gain chụp lúc gọi (gọi trong control_task,
+// cùng task áp gain), nên dòng còn trong hàng đợi không bị đổi sang bộ áp sau (Codex L90-2).
+// first_seq gắn dòng vào lượt (L90-4); line_drop đếm dòng #gain không vào được hàng đợi (tích lũy).
+static volatile uint32_t s_gain_line_drop;
 
-void logger_push_gain(void) {
+void logger_push_gain(uint32_t first_seq) {
     if (log_queue == NULL) return;
-    gain_set_t g;
-    gain_set_current(&g);
-    uint32_t n = gain_set_applied_n();
-    taskENTER_CRITICAL(&s_gain_mux);
-    s_gain_snap = g;
-    s_gain_applied_n = n;
-    taskEXIT_CRITICAL(&s_gain_mux);
-    log_data_t d = { .kind = LOG_KIND_GAIN };
-    (void)xQueueSend(log_queue, &d, 0);
+    log_data_t d = { .kind = LOG_KIND_GAIN, .gain_first_seq = first_seq };
+    gain_set_current(&d.gain);
+    d.gain_applied_n = gain_set_applied_n();
+    if (xQueueSend(log_queue, &d, 0) != pdTRUE) s_gain_line_drop++;
 }
+
+uint32_t logger_seq_next(void) { return s_log_seq + 1; }
 
 uint32_t logger_seq(void)      { return s_log_seq; }
 uint32_t logger_qdrop(void)    { return s_log_qdrop; }
@@ -162,15 +157,13 @@ void logger_task(void *pv) {
             continue;
         }
         if (data.kind == LOG_KIND_GAIN) {
-            gain_set_t g;
-            uint32_t   n_applied;
-            taskENTER_CRITICAL(&s_gain_mux);
-            g = s_gain_snap;
-            n_applied = s_gain_applied_n;
-            taskEXIT_CRITICAL(&s_gain_mux);
             int n = snprintf(buf, sizeof(buf), "#gain");
-            n += gain_set_format(buf + n, sizeof(buf) - (size_t)n - 1, &g, n_applied);
-            buf[n++] = '\n';
+            int m = gain_set_format(buf + n, sizeof(buf) - (size_t)n, &data.gain, data.gain_applied_n);
+            if (m < 0) { s_log_send_err++; continue; }
+            n += m;
+            n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",first_seq=%lu,line_drop=%lu\n",
+                          (unsigned long)data.gain_first_seq, (unsigned long)s_gain_line_drop);
+            if (n >= (int)sizeof(buf)) { s_log_send_err++; continue; }
             if (sendto(sock, buf, n, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0)
                 s_log_send_err++;
             continue;

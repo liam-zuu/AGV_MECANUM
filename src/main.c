@@ -333,8 +333,10 @@ static void run_udp_mark(void) {
     s_run_udp_take0 = s.udp_take;
     // Nhận dạng firmware vào log UDP của lượt (Liam 09/11): 3 bản như #run_end, phòng mất gói
     for (int i = 0; i < 3; i++) logger_push_fw();
-    // Bộ gain đang chạy vào log của lượt (L90): lượt dùng gain nào đọc được từ log
-    for (int i = 0; i < 3; i++) logger_push_gain();
+    // Bộ gain đang chạy vào log của lượt (L90): lượt dùng gain nào đọc được từ log; first_seq =
+    // log_seq của dòng dữ liệu đầu lượt (push_log ngay sau hàm này, cùng tick) để gắn dòng vào lượt
+    uint32_t first_seq = logger_seq_next();
+    for (int i = 0; i < 3; i++) logger_push_gain(first_seq);
 }
 
 // Hết lượt (motor bật → tắt): dòng tổng kết gửi 3 lần; tick mang log_seq của dòng dữ liệu cuối
@@ -478,10 +480,20 @@ static void control_task(void *pv) {
         taskEXIT_CRITICAL(&g_traj_mux);
         bool traj_fresh  = (traj_us > 0) &&
                            ((t_now - traj_us) < TRAJ_TIMEOUT_US);
-        // Tuổi gói lệnh cuối cho log (RB-4, 12/11): −1 khi chưa có gói; kẹp ở INT32_MAX
-        int64_t traj_age_us = (traj_us > 0) ? (t_now - traj_us) : -1000LL;
-        if (traj_age_us > 2147483647000LL) traj_age_us = 2147483647000LL;
-        int32_t traj_age_ms = (traj_us > 0) ? (int32_t)(traj_age_us / 1000LL) : -1;
+        // Tuổi gói lệnh cuối cho log (RB-4; sửa theo Codex L90-5, L90-6 ngày 12/11): thời điểm NHẬN gói lấy
+        // thẳng từ receiver (gói UART hay UDP, kể cả đã hết hạn; không qua bước chuyển 10 ms của
+        // traj_task), mốc thời gian lấy ngay sau khi đọc bản chụp (receiver ghi t_rx_us trước khi commit
+        // dưới cùng khóa, nên hiệu không âm). −1 khi chưa có gói nào từ lúc khởi động.
+        traj_snapshot_t rx_snap;
+        traj_receiver_snapshot(&rx_snap);
+        int64_t t_age_ref = esp_timer_get_time();
+        int32_t traj_age_ms = -1;
+        if (rx_snap.t_rx_us > 0) {
+            int64_t a = t_age_ref - rx_snap.t_rx_us;
+            if (a < 0) a = 0;
+            if (a > 2147483647000LL) a = 2147483647000LL;
+            traj_age_ms = (int32_t)(a / 1000LL);
+        }
 
         if (swc_manual) {
             g_mode = MODE_MANUAL;
@@ -562,16 +574,24 @@ static void control_task(void *pv) {
 
         // ── 10a. Đổi gain qua WiFi (L90, Liam 12/11): chỉ khi motor tắt. Motor tắt thì kết quả
         //         vel_ctrl_step của tick này không dùng (bước 6), nên áp sau bước 8–10 là an toàn;
-        //         motor bật thì từ chối, không giữ chờ. Không in serial ở đây (gain_rx in).
-        gain_set_t gain_req;
+        //         motor bật thì từ chối, không giữ chờ. Gói NHẬN trước tick đầu tiên thấy motor tắt
+        //         cũng bị từ chối (Codex L90-1: gói tới giữa lượt, SWA tắt trước tick kế). #gain_get
+        //         chỉ đọc, trả lời cả khi motor bật. Không in serial ở đây (gain_rx in).
+        static bool    s_motor_prev = false;
+        static int     s_idle_div   = 0;
+        static int64_t s_motor_off_us = 0;      // t_now của tick đầu tiên thấy motor tắt sau một lượt
+        if (!g_motor_enabled && s_motor_prev) s_motor_off_us = t_now;
+        gain_req_t gain_req;
         if (gain_rx_poll(&gain_req)) {
-            int gain_err = g_motor_enabled ? GAIN_ERR_MOTOR_ON : gain_set_apply(&gain_req);
-            gain_rx_done(gain_req.id, gain_err);
-            if (gain_err == GAIN_OK) logger_push_gain();
+            int gain_err = GAIN_OK;
+            if (gain_req.kind == GAIN_MSG_SET) {
+                gain_err = (g_motor_enabled || gain_req.t_rx_us < s_motor_off_us)
+                               ? GAIN_ERR_MOTOR_ON : gain_set_apply(&gain_req.set);
+                if (gain_err == GAIN_OK) logger_push_gain(0);
+            }
+            gain_rx_done(&gain_req, gain_err);
         }
 
-        static bool s_motor_prev = false;
-        static int  s_idle_div   = 0;
         if (!g_motor_enabled) {
             motor_stop_all();
             traj_receiver_send_status(0, 0, 0);
@@ -657,13 +677,13 @@ void app_main(void) {
     ultrasonic_init();
     traj_receiver_init();
     logger_init();
-    gain_rx_init();            // đổi gain qua WiFi, UDP 5014 (L90)
 #ifdef S06_LOAD
     s06_init();
 #endif
 
     // Init controller
     vel_ctrl_init();
+    gain_rx_init();            // đổi gain qua WiFi, UDP 5014 (L90); sau vel_ctrl_init (Codex L90-12)
     ESP_LOGI(TAG, "Controller: %s", CTRL_MODE == CTRL_PID ? "PID" : "ADRC");
     // Nhận dạng firmware (Liam 09/11, phiên CODE): meta.yaml ghi theo dòng này, không theo HEAD trên PC
     ESP_LOGI(TAG, "#fw sha=%s dirty=%d env=%s", FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV);
@@ -672,8 +692,8 @@ void app_main(void) {
         char gbuf[256];
         gain_set_t g0;
         gain_set_current(&g0);
-        gain_set_format(gbuf, sizeof(gbuf), &g0, gain_set_applied_n());
-        ESP_LOGI(TAG, "#gain%s", gbuf);
+        if (gain_set_format(gbuf, sizeof(gbuf), &g0, gain_set_applied_n()) >= 0)
+            ESP_LOGI(TAG, "#gain%s", gbuf);
     }
 
     motor_enable(false);

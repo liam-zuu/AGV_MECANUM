@@ -2,6 +2,9 @@
 #include "../fw_id_gen.h"      // FW_GIT_SHA, FW_ENV
 #include "wifi.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_wifi.h"
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -13,49 +16,66 @@
 
 static const char *TAG = "GAIN";
 
-typedef struct { uint32_t id; int err; } gain_result_t;
+typedef struct {
+    uint32_t   txn;
+    int        err;
+    gain_set_t cur;         // bộ gain đang chạy sau khi xử lý, chụp trong control_task
+    uint32_t   applied_n;
+} gain_result_t;
 
 static QueueHandle_t s_req;   // 1 chỗ: gain_rx → control_task
 static QueueHandle_t s_res;   // 1 chỗ: control_task → gain_rx
+static uint32_t      s_boot;  // mã khởi động ngẫu nhiên (đổi mỗi lần boot): PC thấy board đã reset
+static char          s_mac[18] = "??:??:??:??:??:??";
 
-bool gain_rx_poll(gain_set_t *req) {
+bool gain_rx_poll(gain_req_t *req) {
     return s_req != NULL && xQueueReceive(s_req, req, 0) == pdTRUE;
 }
 
-void gain_rx_done(uint32_t id, int err) {
+void gain_rx_done(const gain_req_t *req, int err) {
     if (s_res == NULL) return;
-    gain_result_t r = { .id = id, .err = err };
+    gain_result_t r = { .txn = req->txn, .err = err };
+    gain_set_current(&r.cur);
+    r.applied_n = gain_set_applied_n();
     (void)xQueueOverwrite(s_res, &r);
 }
 
-// "#gain_ack,req_id=..,ok=..,err=..,sha=..,env=..,id=..,applied_n=..,ctrl=..,<7 cặp>" về đúng nơi gửi.
-// Gain trong gói trả lời là gain đang chạy (đọc lại sau khi áp), không phải gain trong yêu cầu.
-static void reply(int sock, const struct sockaddr_in *to, uint32_t req_id, int err) {
+// "#gain_ack,tx=..,req_id=..,ok=..,err=..,sha=..,env=..,mac=..,boot=..[,id=..,applied_n=..,ctrl=..,<7 cặp>]"
+// về đúng nơi gửi. Phần gain chỉ có khi control_task đã xử lý yêu cầu (res != NULL): đó là bộ đang
+// chạy sau yêu cầu, không phải bộ trong yêu cầu. Lỗi khuôn, busy, timeout: không kèm gain.
+static void reply(int sock, const struct sockaddr_in *to, uint32_t tx, uint32_t req_id, int err,
+                  const gain_result_t *res) {
     char buf[480];
-    gain_set_t cur;
-    gain_set_current(&cur);
-    int k = snprintf(buf, sizeof(buf), "#gain_ack,req_id=%lu,ok=%d,err=%s,sha=%s,env=%s",
-                     (unsigned long)req_id, err == GAIN_OK, gain_err_str(err), FW_GIT_SHA, FW_ENV);
+    int k = snprintf(buf, sizeof(buf), "#gain_ack,tx=%lu,req_id=%lu,ok=%d,err=%s,sha=%s,env=%s,mac=%s,boot=%08lx",
+                     (unsigned long)tx, (unsigned long)req_id, err == GAIN_OK, gain_err_str(err),
+                     FW_GIT_SHA, FW_ENV, s_mac, (unsigned long)s_boot);
     if (k < 0 || k >= (int)sizeof(buf) - 2) return;
-    k += gain_set_format(buf + k, sizeof(buf) - (size_t)k - 1, &cur, gain_set_applied_n());
+    if (res != NULL) {
+        int m = gain_set_format(buf + k, sizeof(buf) - (size_t)k - 1, &res->cur, res->applied_n);
+        if (m < 0) return;                                    // không gửi trả lời cụt
+        k += m;
+    }
     buf[k++] = '\n';
     (void)sendto(sock, buf, k, 0, (const struct sockaddr *)to, sizeof(*to));
 }
 
-// Chờ kết quả đúng id; quá hạn thì GAIN_ERR_TIMEOUT
-static int wait_result(uint32_t id) {
+// Chờ kết quả đúng mã giao dịch; quá hạn thì false
+static bool wait_result(uint32_t txn, gain_result_t *out) {
     TickType_t t_end = xTaskGetTickCount() + pdMS_TO_TICKS(GAIN_REPLY_WAIT_MS);
     for (;;) {
         TickType_t now = xTaskGetTickCount();
         int32_t left = (int32_t)(t_end - now);
-        if (left <= 0) return GAIN_ERR_TIMEOUT;
-        gain_result_t r;
-        if (xQueueReceive(s_res, &r, (TickType_t)left) == pdTRUE && r.id == id) return r.err;
+        if (left <= 0) return false;
+        if (xQueueReceive(s_res, out, (TickType_t)left) == pdTRUE && out->txn == txn) return true;
     }
 }
 
 static void gain_rx_task(void *pv) {
     while (!wifi_is_connected()) vTaskDelay(pdMS_TO_TICKS(500));
+
+    uint8_t mac[6];
+    if (esp_wifi_get_mac(WIFI_IF_STA, mac) == ESP_OK)
+        snprintf(s_mac, sizeof(s_mac), "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) {
@@ -74,41 +94,55 @@ static void gain_rx_task(void *pv) {
         vTaskDelete(NULL);
         return;
     }
-    ESP_LOGI(TAG, "gain UDP listening on port %d", GAIN_UDP_PORT);
+    ESP_LOGI(TAG, "gain UDP listening on port %d, mac=%s boot=%08lx", GAIN_UDP_PORT, s_mac, (unsigned long)s_boot);
 
-    char buf[330];
+    // Bộ đệm dài hơn gói hợp lệ dài nhất: datagram dài hơn GAIN_MSG_MAX + 2 bị từ chối, không bị cắt
+    // âm thầm thành gói hợp lệ (Codex L90-7)
+    static char buf[GAIN_MSG_MAX + 64];
+    uint32_t txn = 0;
     for (;;) {
         struct sockaddr_in src;
         socklen_t sl = sizeof(src);
-        int n = recvfrom(sock, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&src, &sl);
+        int n = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr *)&src, &sl);
         if (n <= 0) continue;
+        int64_t t_rx = esp_timer_get_time();
 
-        gain_set_t g;
-        int err = gain_set_parse(buf, (size_t)n, &g);
-        uint32_t req_id = err == GAIN_OK ? g.id : 0;
+        gain_req_t req = { .txn = ++txn, .t_rx_us = t_rx };
+        uint32_t tx = 0;
+        int err = (n > GAIN_MSG_MAX + 2) ? GAIN_ERR_FORMAT
+                                         : gain_msg_parse(buf, (size_t)n, &req.kind, &req.set, &tx);
+        uint32_t req_id = (err == GAIN_OK && req.kind == GAIN_MSG_SET) ? req.set.id : 0;
+        gain_result_t res;
+        bool have_res = false;
         if (err == GAIN_OK) {
             xQueueReset(s_res);                                // bỏ kết quả cũ (yêu cầu đã quá hạn)
-            if (xQueueSend(s_req, &g, 0) != pdTRUE) {
+            if (xQueueSend(s_req, &req, 0) != pdTRUE) {
                 err = GAIN_ERR_BUSY;
+            } else if (wait_result(req.txn, &res)) {
+                have_res = true;
+                err = res.err;
             } else {
-                err = wait_result(g.id);
-                // Quá hạn: rút yêu cầu nếu control_task chưa lấy. Nếu nó đã lấy thì bộ gain có thể đã áp;
-                // PC gửi lại cùng id, gói trả lời luôn mang gain đang chạy nên PC thấy được.
-                if (err == GAIN_ERR_TIMEOUT) xQueueReset(s_req);
+                // Quá hạn: rút yêu cầu nếu control_task chưa lấy. Nếu nó đã lấy thì kết quả đến sau mang
+                // mã giao dịch cũ và bị bỏ ở lần chờ kế (L90-3); PC thấy timeout, hỏi lại bằng #gain_get.
+                xQueueReset(s_req);
+                err = GAIN_ERR_TIMEOUT;
             }
         }
         // Log ở task này (lõi 0), không ở control_task: in serial chậm, không chen vòng 100 Hz
-        if (err == GAIN_OK) ESP_LOGI(TAG, "gain_set id=%lu applied", (unsigned long)req_id);
-        else                ESP_LOGW(TAG, "gain_set id=%lu rejected: %s", (unsigned long)req_id, gain_err_str(err));
-        reply(sock, &src, req_id, err);
+        if (req.kind == GAIN_MSG_GET && err == GAIN_OK) ESP_LOGI(TAG, "gain_get tx=%lu", (unsigned long)tx);
+        else if (err == GAIN_OK) ESP_LOGI(TAG, "gain_set id=%lu tx=%lu applied", (unsigned long)req_id, (unsigned long)tx);
+        else ESP_LOGW(TAG, "gain msg id=%lu tx=%lu rejected: %s", (unsigned long)req_id, (unsigned long)tx, gain_err_str(err));
+        reply(sock, &src, tx, req_id, err, have_res ? &res : NULL);
     }
 }
 
 void gain_rx_init(void) {
-    s_req = xQueueCreate(1, sizeof(gain_set_t));
+    s_boot = esp_random();
+    s_req = xQueueCreate(1, sizeof(gain_req_t));
     s_res = xQueueCreate(1, sizeof(gain_result_t));
     if (s_req == NULL || s_res == NULL) {
         ESP_LOGE(TAG, "queue create failed: gain over WiFi disabled");
+        s_req = NULL;
         return;
     }
     xTaskCreatePinnedToCore(gain_rx_task, "gain_rx", 4096, NULL, 1, NULL, 0);
