@@ -238,6 +238,12 @@ static void encoder_task(void *pv) {
 // ─────────────────────────────────────────
 // Log 100 Hz (motor bật) / 10 Hz (motor tắt): cột cũ + cột IMU, mất log (spec controller–IMU v2.2 §8)
 // ─────────────────────────────────────────
+// Số đếm cho dòng log (RS-4, L98, L99; xem control_task): đọc xong trong LOG_CNT_WIN_US sau t_now,
+// không được thì cả bốn cột ghi LOG_CNT_INVALID
+#define LOG_CNT_WIN_US   50
+#define LOG_CNT_TRIES    4
+#define LOG_CNT_INVALID  INT32_MIN
+
 // cnt: số đếm encoder đọc cùng lúc với t_now (RS-4, L98; xem control_task), không phải g_enc_count
 static void push_log(int64_t t_now, const int32_t cnt[ENC_COUNT], agv_velocity_t vel,
                      const vel_ctrl_out_t *vc, const int pwm[4], const imu_data_t *imu,
@@ -382,16 +388,26 @@ static void control_task(void *pv) {
 
         // RS-4 (L98, Liam 13/11 "Sửa firmware"): số đếm encoder cho dòng log đọc liền sau t_now,
         // trong lúc tạm dừng bộ lập lịch của lõi này, nên encoder_task (ưu tiên 6, cùng lõi 1) không
-        // chen vào giữa hai lần đọc; chỉ ngắt còn chen được. Dòng log ghi cặp (timestamp_us, *_count)
-        // của cùng một thời điểm. g_enc_count (bản encoder_task chụp theo chu kỳ riêng, có thể cũ
-        // hay mới hơn t_now) vẫn là đầu vào controller như cũ: điều khiển không đổi.
-        // encoder_read_all chỉ đọc PCNT, không ghi trạng thái chung của encoder.c (khác
-        // encoder_get_count), nên không đụng phép tính rpm của encoder_task.
+        // chen vào giữa hai lần đọc. Dòng log ghi cặp (timestamp_us, *_count) của cùng một thời điểm.
+        // g_enc_count (bản encoder_task chụp theo chu kỳ riêng, có thể cũ hay mới hơn t_now) vẫn là
+        // đầu vào controller như cũ: điều khiển không đổi. encoder_read_all chỉ đọc PCNT, không ghi
+        // trạng thái chung của encoder.c (khác encoder_get_count), nên không đụng phép tính rpm.
+        // L99 (Codex L98-1, Liam 13/11 "Sửa hết, vòng 4"): ngắt vẫn chen được giữa t_now và lần đọc
+        // PCNT, nên đọc giờ lần nữa sau bốn số đếm; quá LOG_CNT_WIN_US thì đọc lại (tối đa
+        // LOG_CNT_TRIES lần). Vẫn quá thì bốn cột *_count ghi LOG_CNT_INVALID: bộ ánh xạ RS-4 bỏ dòng
+        // đó. Mọi dòng log có số đếm hợp lệ được đọc trong [t_now, t_now + LOG_CNT_WIN_US].
         int32_t log_cnt[ENC_COUNT];
+        int64_t t_now  = 0;
+        bool    cnt_ok = false;
         vTaskSuspendAll();
-        int64_t t_now   = esp_timer_get_time();
-        encoder_read_all(log_cnt);
+        for (int k = 0; k < LOG_CNT_TRIES && !cnt_ok; k++) {
+            t_now = esp_timer_get_time();
+            encoder_read_all(log_cnt);
+            cnt_ok = (esp_timer_get_time() - t_now) <= LOG_CNT_WIN_US;
+        }
         (void)xTaskResumeAll();
+        if (!cnt_ok)
+            for (int i = 0; i < ENC_COUNT; i++) log_cnt[i] = LOG_CNT_INVALID;
         float dt_actual = (t_now - t_prev) * 1e-6f;
         t_prev = t_now;
         if (dt_actual <= 0.0f || dt_actual > 0.1f) dt_actual = dt;
