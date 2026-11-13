@@ -238,16 +238,18 @@ static void encoder_task(void *pv) {
 // ─────────────────────────────────────────
 // Log 100 Hz (motor bật) / 10 Hz (motor tắt): cột cũ + cột IMU, mất log (spec controller–IMU v2.2 §8)
 // ─────────────────────────────────────────
-static void push_log(int64_t t_now, agv_velocity_t vel, const vel_ctrl_out_t *vc,
-                     const int pwm[4], const imu_data_t *imu, bool motor_on, int32_t traj_age_ms) {
+// cnt: số đếm encoder đọc cùng lúc với t_now (RS-4, L98; xem control_task), không phải g_enc_count
+static void push_log(int64_t t_now, const int32_t cnt[ENC_COUNT], agv_velocity_t vel,
+                     const vel_ctrl_out_t *vc, const int pwm[4], const imu_data_t *imu,
+                     bool motor_on, int32_t traj_age_ms) {
     const imu_fusion_out_t *m = &vc->imu;
     const heading_out_t    *h = &vc->head;
     log_data_t d = {
         .timestamp_us = t_now,
-        .fl_count = g_enc_count[ENC_FL],
-        .fr_count = g_enc_count[ENC_FR],
-        .rl_count = g_enc_count[ENC_RL],
-        .rr_count = g_enc_count[ENC_RR],
+        .fl_count = cnt[ENC_FL],
+        .fr_count = cnt[ENC_FR],
+        .rl_count = cnt[ENC_RL],
+        .rr_count = cnt[ENC_RR],
         .fl_rpm   = g_enc_rpm[ENC_FL],
         .fr_rpm   = g_enc_rpm[ENC_FR],
         .rl_rpm   = g_enc_rpm[ENC_RL],
@@ -378,7 +380,18 @@ static void control_task(void *pv) {
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz
 
+        // RS-4 (L98, Liam 13/11 "Sửa firmware"): số đếm encoder cho dòng log đọc liền sau t_now,
+        // trong lúc tạm dừng bộ lập lịch của lõi này, nên encoder_task (ưu tiên 6, cùng lõi 1) không
+        // chen vào giữa hai lần đọc; chỉ ngắt còn chen được. Dòng log ghi cặp (timestamp_us, *_count)
+        // của cùng một thời điểm. g_enc_count (bản encoder_task chụp theo chu kỳ riêng, có thể cũ
+        // hay mới hơn t_now) vẫn là đầu vào controller như cũ: điều khiển không đổi.
+        // encoder_read_all chỉ đọc PCNT, không ghi trạng thái chung của encoder.c (khác
+        // encoder_get_count), nên không đụng phép tính rpm của encoder_task.
+        int32_t log_cnt[ENC_COUNT];
+        vTaskSuspendAll();
         int64_t t_now   = esp_timer_get_time();
+        encoder_read_all(log_cnt);
+        (void)xTaskResumeAll();
         float dt_actual = (t_now - t_prev) * 1e-6f;
         t_prev = t_now;
         if (dt_actual <= 0.0f || dt_actual > 0.1f) dt_actual = dt;
@@ -617,7 +630,7 @@ static void control_task(void *pv) {
             if (++s_idle_div >= 10) {                         // dòng nhịp thưa 10 Hz khi motor tắt
                 s_idle_div = 0;
                 const int pwm0[4] = {0, 0, 0, 0};
-                push_log(t_now, vel, &vc, pwm0, &s_imu, false, traj_age_ms);
+                push_log(t_now, log_cnt, vel, &vc, pwm0, &s_imu, false, traj_age_ms);
             }
             continue;
         }
@@ -667,7 +680,7 @@ static void control_task(void *pv) {
         // ── 12. Push log ──────────────────────────────────────────────────────
         const int pwm_out[4] = { pwm_fl, pwm_fr, pwm_rl, pwm_rr };
         vel_ctrl_applied(pwm_out, &vc);   // đứng yên + bộ đếm theo PWM thực áp (Codex ctrl-imu #12)
-        push_log(t_now, vel, &vc, pwm_out, &s_imu, true, traj_age_ms);
+        push_log(t_now, log_cnt, vel, &vc, pwm_out, &s_imu, true, traj_age_ms);
     }
 }
 
