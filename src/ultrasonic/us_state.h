@@ -29,8 +29,8 @@
 // (c) Luật cho bộ chấm (chưa viết; L95-4, L95-5, L95-8, L95-R2-2): lượt được coi là "không bị interlock
 //     siêu âm" chỉ khi đủ cả:
 //     - boot của #us/#us_end gắn DUY NHẤT với chính dữ liệu của lượt (CSV, #run_end không mang boot): cùng
-//       một lần khởi động theo log serial ESP32 của buổi (không có reset giữa) hay #fw + #gain_ack cùng boot;
-//       chưa gắn được là mơ hồ;
+//       một lần khởi động theo log serial ESP32 của buổi (không có reset giữa) hay #gain_ack / #gain cùng
+//       boot (#fw không mang boot; boot của #gain có từ 14/11, R134C3-1); chưa gắn được là mơ hồ;
 //     - có #us,ev=start và #us_end cùng boot; bản sao giống hệt gộp thành một sự kiện, bản khác nội dung
 //       của cùng sự kiện là xung đột;
 //     - first_seq, last_data_seq khớp hai cạnh motor của lượt (seq dự định, xét cả dòng dữ liệu mất),

@@ -107,7 +107,8 @@ typedef struct {
 #define LOG_KIND_DATA    0
 #define LOG_KIND_RUN_END 1
 #define LOG_KIND_FW      2   // dòng "#fw,sha=..,dirty=..,env=.." (fw_id_gen.h), gửi ở đầu mỗi lượt
-#define LOG_KIND_GAIN    3   // dòng "#gain,id=..,applied_n=..,ctrl=..,<7 gain>" (L90): khi áp, đầu mỗi lượt
+#define LOG_KIND_GAIN    3   // dòng "#gain,id=..,applied_n=..,ctrl=..,<7 gain>,first_seq=..,line_drop=..,boot=.."
+                             // (L90; boot từ 14/11, R134C3-1): khi áp, đầu mỗi lượt
 #define LOG_KIND_US      4   // dòng "#us,.." / "#us_end,.." (L95, us_state.h): đầu lượt, khi SWB đổi, cuối lượt
 
 // ─────────────────────────────────────────

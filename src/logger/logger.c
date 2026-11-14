@@ -2,6 +2,7 @@
 #include "../fw_id_gen.h"      // FW_GIT_SHA, FW_GIT_DIRTY, FW_ENV: scripts/build_id.py sinh lúc build
 #include "wifi/wifi.h"
 #include "gain_set.h"
+#include "gain_rx/gain_rx.h"   // gain_rx_boot_id(): trường boot của dòng #gain
 #include "esp_log.h"
 #include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
@@ -178,8 +179,11 @@ void logger_task(void *pv) {
             int m = gain_set_format(buf + n, sizeof(buf) - (size_t)n, &data.gain, data.gain_applied_n);
             if (m < 0) { s_log_send_err++; continue; }
             n += m;
-            n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",first_seq=%lu,line_drop=%lu\n",
-                          (unsigned long)data.gain_first_seq, (unsigned long)s_gain_line_drop);
+            // boot (Liam 14/11 "Thêm boot vào #gain", R134C3-1): cùng s_boot của #us/#us_end và #gain_ack,
+            // đặt một lần ở gain_rx_init() trước mọi logger_push_gain; trường cuối để trường cũ giữ chỗ
+            n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",first_seq=%lu,line_drop=%lu,boot=%08lx\n",
+                          (unsigned long)data.gain_first_seq, (unsigned long)s_gain_line_drop,
+                          (unsigned long)gain_rx_boot_id());
             if (n >= (int)sizeof(buf)) { s_log_send_err++; continue; }
             if (sendto(sock, buf, n, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0)
                 s_log_send_err++;
