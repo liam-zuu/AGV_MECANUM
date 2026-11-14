@@ -131,7 +131,7 @@ void logger_task(void *pv);                 // tạo task trong app_main, core 0
 // Non-blocking; đầy thì bỏ và đếm (trường drop của dòng sau).
 #include "us_diag.h"
 #define LOGGER_DIAG_QUEUE_SIZE 24
-void logger_push_usdiag_cycle(const us_diag_cycle_t *c);   // từ ultrasonic_task
+void logger_push_usdiag_ping(const us_diag_ping_t *p);     // từ ultrasonic_task
 void logger_push_usdiag_blk(const us_diag_blk_t *b);       // từ control_task
 #endif
 

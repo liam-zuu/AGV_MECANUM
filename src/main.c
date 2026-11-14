@@ -17,6 +17,8 @@
 #include "gain_rx/gain_rx.h"
 #include "ultrasonic/ultrasonic.h"
 #include "ultrasonic/us_state.h"
+#include "ultrasonic/us_guard.h"
+#include "freertos/queue.h"
 #include "manual_control/manual_control.h"
 #include "controller/vel_ctrl.h"
 #include "tests/test_runner.h"
@@ -41,7 +43,7 @@ static const char *TAG = "MAIN";
 #define CH_SWB  8   // channel 9 — tắt/bật ultrasonic obstacle
 
 // ─── Threshold ────────────────────────────────────────────────────────────────
-#define OBSTACLE_CM      20.0f      // tăng lên 20cm — US-015 không ổn định dưới 10cm
+// OBSTACLE_CM 20 cm của 5bde4c5 thay bằng us_guard_cfg_t (lock 30 cm, mở 40 cm, vùng chậm 80 cm; CODE_US)
 #define TRAJ_TIMEOUT_US  200000LL   // 200ms tính bằng µs
 
 // ─── System mode ─────────────────────────────────────────────────────────────
@@ -63,8 +65,15 @@ static int64_t                  g_last_traj_us    = 0;
 static traj_setpoint_t          g_setpoint        = {0};
 static volatile float            g_enc_rpm[4]     = {0};
 static volatile int32_t          g_enc_count[4]   = {0};
-static volatile us_data_t        g_us_data        = {0};
-static SemaphoreHandle_t         g_us_mutex;
+// CODE_US (ultrasonic.h, us_guard.h): ultrasonic_task (lõi 0) gửi từng mẫu vào hàng đợi; control_task
+// (lõi 1) lấy hết mỗi tick và chạy us_guard. Thay g_us_data + mutex + cổng 50 ms của 5bde4c5.
+typedef struct {
+    uint8_t  i;        // us_id_t
+    uint8_t  kind;     // US_K_*
+    float    cm;
+} us_item_t;
+#define US_Q_SIZE 16
+static QueueHandle_t             g_us_q;
 
 static volatile bool g_obstacle_enabled = true;
 static volatile bool g_imu_fail         = false;   // imu_init() lỗi: motor tắt, LED/còi báo (§7)
@@ -95,69 +104,43 @@ static void traj_task(void *pv) {
 // ─────────────────────────────────────────
 // CORE 0 - ultrasonic_task (priority 1)
 // ─────────────────────────────────────────
+// CODE_US (Liam 14/11 phiên CODE_US "Duyệt, Codex trước buổi (Recommended)"; thiết kế hil
+// 03_CODE/docs/2026-11-14_Thiet_ke_CODE_US_v1.md mục 11.3): phát mỗi US_PING_MS cho cả 4 cảm biến (TRIG
+// chung), thu lần 1 sau US_COLLECT1_TICKS (vật gần đã xong), thu cuối sau US_COLLECT2_TICKS; mỗi mẫu
+// quyết xong gửi ngay vào g_us_q. Lọc, khóa, giảm tốc ở control_task (us_guard.c).
+static void us_publish(const us_meas_t *m, uint8_t mask) {
+    for (int i = 0; i < ULTRASONIC_COUNT; i++) {
+        if (!(mask & (1u << i))) continue;
+        us_item_t it = { .i = (uint8_t)i, .kind = m[i].kind, .cm = m[i].cm };
+        (void)xQueueSend(g_us_q, &it, 0);   // đầy (control dừng hơn 0,2 s) thì bỏ mẫu
+    }
+}
+
 static void ultrasonic_task(void *pv) {
-    us_data_t buf[3];
-    int idx = 0;
-
-    for (int i = 0; i < 3; i++) ultrasonic_read_all(&buf[i]);
-
-    while (1) {
-        ultrasonic_read_all(&buf[idx]);
-        idx = (idx + 1) % 3;
-
-        us_data_t filtered;
-        for (int i = 0; i < ULTRASONIC_COUNT; i++) {
-            int valid_count = 0;
-            float vals[3];
-            for (int j = 0; j < 3; j++) {
-                if (buf[j].valid[i]) vals[valid_count++] = buf[j].distance_cm[i];
-            }
-
-            if (valid_count == 0) {
-                filtered.valid[i]       = false;
-                filtered.distance_cm[i] = -1.0f;
-            } else if (valid_count == 1) {
-                filtered.valid[i]       = true;
-                filtered.distance_cm[i] = vals[0];
-            } else if (valid_count == 2) {
-                filtered.valid[i]       = true;
-                filtered.distance_cm[i] = (vals[0] + vals[1]) / 2.0f;
-            } else {
-                if (vals[0] > vals[1]) { float t = vals[0]; vals[0] = vals[1]; vals[1] = t; }
-                if (vals[1] > vals[2]) { float t = vals[1]; vals[1] = vals[2]; vals[2] = t; }
-                if (vals[0] > vals[1]) { float t = vals[0]; vals[0] = vals[1]; vals[1] = t; }
-                filtered.valid[i]       = true;
-                filtered.distance_cm[i] = vals[1];
-            }
-        }
-
-        if (xSemaphoreTake(g_us_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-            g_us_data = filtered;
-            xSemaphoreGive(g_us_mutex);
-        }
+    TickType_t last = xTaskGetTickCount();
 #ifdef US_DIAG
-        // CODE_US (us_diag.h): một dòng #usr cho vòng đo vừa xong, đẩy SAU khi đo và lọc xong
-        // (ngoài vòng chờ chân), trước lần nghỉ 20 ms như cũ. nv = số mẫu hợp lệ của bộ lọc.
-        {
-            static uint32_t s_cyc     = 0;
-            static int64_t  s_t_prev  = 0;
-            us_diag_cycle_t dc;
-            ultrasonic_diag_get(dc.s);
-            dc.t_us   = dc.s[0].t_trig;
-            dc.cyc    = ++s_cyc;
-            dc.cyc_us = s_t_prev > 0 ? (uint32_t)(dc.t_us - s_t_prev) : 0u;
-            s_t_prev  = dc.t_us;
-            dc.drop   = 0;   // logger điền
-            for (int i = 0; i < ULTRASONIC_COUNT; i++) {
-                int nv = 0;
-                for (int j = 0; j < 3; j++) if (buf[j].valid[i]) nv++;
-                dc.nv[i]  = (uint8_t)nv;
-                dc.d_f[i] = filtered.valid[i] ? filtered.distance_cm[i] : -1.0f;
-            }
-            logger_push_usdiag_cycle(&dc);
-        }
+    uint32_t seq = 0;
 #endif
-        vTaskDelay(pdMS_TO_TICKS(20));
+    while (1) {
+        us_meas_t m[ULTRASONIC_COUNT] = {0};
+        int64_t t_trig = ultrasonic_ping();
+        vTaskDelay(US_COLLECT1_TICKS);
+        us_publish(m, ultrasonic_collect(m, false));
+        vTaskDelay(US_COLLECT2_TICKS - US_COLLECT1_TICKS);
+        us_publish(m, ultrasonic_collect(m, true));
+#ifdef US_DIAG
+        // một dòng #usp mỗi lần phát, sau lần thu cuối (us_diag.h)
+        us_diag_ping_t dp = { .t_us = t_trig, .seq = ++seq };
+        for (int i = 0; i < ULTRASONIC_COUNT; i++) {
+            dp.m[i] = (us_diag_meas_t){ .kind = m[i].kind, .pre = m[i].pre, .stage = m[i].stage,
+                                        .edges = m[i].edges, .cm = m[i].cm, .rise_us = m[i].rise_us,
+                                        .w_us = m[i].w_us };
+        }
+        logger_push_usdiag_ping(&dp);
+#else
+        (void)t_trig;
+#endif
+        vTaskDelayUntil(&last, pdMS_TO_TICKS(US_PING_MS));
     }
 }
 
@@ -389,6 +372,35 @@ static void push_run_end(void) {
     for (int i = 0; i < 3; i++) logger_push(&d);
 }
 
+// CODE_US: bộ khóa siêu âm (us_guard.c) và 4 cờ chặn cũ mà bước 7c, vel_ctrl, 10b, #us_end dùng tiếp.
+// Chỉ control_task đọc/ghi.
+static us_guard_cfg_t s_usg_cfg;
+static us_guard_t     s_usg;
+static bool           s_front_blocked = false;
+static bool           s_back_blocked  = false;
+static bool           s_left_blocked  = false;
+static bool           s_right_blocked = false;
+
+// Chép trạng thái khóa sang 4 cờ; env us_diag gửi #usb khi cờ đổi.
+static void us_sync_flags(int64_t t_now) {
+    s_front_blocked = g_obstacle_enabled && s_usg.locked[US_FRONT];
+    s_back_blocked  = g_obstacle_enabled && s_usg.locked[US_BACK];
+    s_left_blocked  = g_obstacle_enabled && s_usg.locked[US_LEFT];
+    s_right_blocked = g_obstacle_enabled && s_usg.locked[US_RIGHT];
+#ifdef US_DIAG
+    static uint8_t s_blk_prev[US_G_N] = {0};
+    uint8_t blk[US_G_N] = { s_front_blocked, s_back_blocked, s_left_blocked, s_right_blocked };
+    if (memcmp(blk, s_blk_prev, sizeof(blk)) != 0) {
+        us_diag_blk_t db = { .t_us = t_now, .seq = logger_seq_next() };
+        for (int k = 0; k < US_G_N; k++) { db.blk[k] = blk[k]; db.d[k] = s_usg.d_last[k]; }
+        logger_push_usdiag_blk(&db);
+        memcpy(s_blk_prev, blk, sizeof(blk));
+    }
+#else
+    (void)t_now;
+#endif
+}
+
 // ─────────────────────────────────────────
 // CORE 1 - control_task (priority 5)
 // ─────────────────────────────────────────
@@ -475,81 +487,32 @@ static void control_task(void *pv) {
 
 
         // ── 2b. SWB — tắt/bật obstacle detection ở MỌI chế độ (L95, Liam 12/11 "SWB + ghi log"; trước
-        //        đây chỉ MANUAL, AUTO luôn bật). Không có iBUS hợp lệ thì bật (us_state.c). Cờ chặn cũ
-        //        chỉ xóa ở lần cập nhật siêu âm kế (≤ khoảng 50 ms, bước 4); log đếm theo cờ thật.
+        //        đây chỉ MANUAL, AUTO luôn bật). Không có iBUS hợp lệ thì bật (us_state.c). Đổi SWB thì
+        //        bộ khóa siêu âm đặt lại và cờ chặn tắt ngay ở bước 4 cùng tick (CODE_US); log đếm theo cờ thật.
         s_swb_raw          = has_rc ? (int32_t)rc.channel[CH_SWB] : -1;
         g_obstacle_enabled = us_swb_enabled(has_rc, has_rc ? rc.channel[CH_SWB] : 0);
 
         // ── 3. SWD — buzzer (TODO: task riêng) ───────────────────────────────
 
-        // ── 4. Emergency stop — ultrasonic ───────────────────────────────────
-        static bool    s_obstacle      = false;
-        static int64_t s_last_update   = 0;
-        static int     obstacle_count  = 0;
-        static int     clear_count     = 0;
-        static bool    s_front_blocked = false;
-        static bool    s_back_blocked  = false;
-        static bool    s_left_blocked  = false;
-        static bool    s_right_blocked = false;
-
-        static us_data_t us_snap = {0};
-        bool us_data_fresh = false;
-
-        if (xSemaphoreTake(g_us_mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
-            us_snap = g_us_data;
-            xSemaphoreGive(g_us_mutex);
-            us_data_fresh = true;
+        // ── 4. Siêu âm: lấy mẫu mới, lọc, khóa (CODE_US, us_guard.c; thiết kế hil
+        //       03_CODE/docs/2026-11-14_Thiet_ke_CODE_US_v1.md mục 11.3). Mỗi mẫu dùng ngay ở tick này
+        //       (bỏ cổng 50 ms của 5bde4c5). Mở khóa cần lệnh hướng đó về 0 (bước 7c, us_guard_intent).
+        //       SWB tắt (hay đổi) thì đặt lại bộ khóa và bỏ mẫu: cờ chặn tắt ngay ở tick này.
+        static bool s_usg_ready = false;
+        static bool s_usg_en    = false;
+        if (!s_usg_ready || g_obstacle_enabled != s_usg_en) {
+            if (!s_usg_ready) us_guard_cfg_default(&s_usg_cfg);
+            us_guard_reset(&s_usg);
+            s_usg_ready = true;
+            s_usg_en    = g_obstacle_enabled;
         }
-
-        if (us_data_fresh && (t_now - s_last_update > 50000LL)) {
-            bool any_obstacle = false;
-            bool all_clear    = true;
-
-            if (g_obstacle_enabled) {
-                s_front_blocked = us_snap.valid[US_FRONT] && us_snap.distance_cm[US_FRONT] < OBSTACLE_CM;
-                s_back_blocked  = us_snap.valid[US_BACK]  && us_snap.distance_cm[US_BACK]  < OBSTACLE_CM;
-                s_left_blocked  = us_snap.valid[US_LEFT]  && us_snap.distance_cm[US_LEFT]  < OBSTACLE_CM;
-                s_right_blocked = us_snap.valid[US_RIGHT] && us_snap.distance_cm[US_RIGHT] < OBSTACLE_CM;
-            } else {
-                s_front_blocked = false;
-                s_back_blocked  = false;
-                s_left_blocked  = false;
-                s_right_blocked = false;
-            }
-
-            any_obstacle = s_front_blocked || s_back_blocked ||
-                           s_left_blocked  || s_right_blocked;
-            all_clear    = !any_obstacle;
-
-            if (any_obstacle) {
-                clear_count = 0;
-                obstacle_count++;
-                if (obstacle_count >= 2) s_obstacle = true;
-            } else {
-                obstacle_count = 0;
-                clear_count++;
-                if (clear_count >= 3 && all_clear) s_obstacle = false;
-            }
-            s_last_update = t_now;
-#ifdef US_DIAG
-            // CODE_US (us_diag.h): #usb khi một cờ chặn đổi; d = giá trị lọc control vừa dùng
-            {
-                static uint8_t s_blk_prev[ULTRASONIC_COUNT] = {0};
-                uint8_t blk[ULTRASONIC_COUNT] = {
-                    s_front_blocked, s_back_blocked, s_left_blocked, s_right_blocked };
-                if (memcmp(blk, s_blk_prev, sizeof(blk)) != 0) {
-                    us_diag_blk_t db = { .t_us = t_now, .seq = logger_seq_next() };
-                    for (int i = 0; i < ULTRASONIC_COUNT; i++) {
-                        db.blk[i] = blk[i];
-                        db.d[i]   = us_snap.valid[i] ? us_snap.distance_cm[i] : -1.0f;
-                    }
-                    logger_push_usdiag_blk(&db);
-                    memcpy(s_blk_prev, blk, sizeof(blk));
-                }
-            }
-#endif
+        {
+            us_item_t it;
+            while (xQueueReceive(g_us_q, &it, 0) == pdTRUE)
+                if (g_obstacle_enabled) us_guard_sample(&s_usg, &s_usg_cfg, it.i, it.kind, it.cm);
         }
-        g_emergency_stop = s_obstacle;
+        us_sync_flags(t_now);
+        g_emergency_stop = us_guard_any_locked(&s_usg);   // đèn đỏ + còi (led_task) theo khóa thật
 
         // ── 5. Xác định mode ─────────────────────────────────────────────────
         static int s_rc_lost_counter = 0;
@@ -625,14 +588,17 @@ static void control_task(void *pv) {
         bool intent_left  = vel.vy > 0.0f;
         bool intent_right = vel.vy < 0.0f;
 
-        // ── 7c. Interlock ─────────────────────────────────────────────────────
-        // us_cut: tick này interlock đổi lệnh vận tốc (L95, chỉ để đếm vào #us_end)
-        bool us_cut = (s_front_blocked && vel.vx > 0.0f) || (s_back_blocked  && vel.vx < 0.0f) ||
-                      (s_left_blocked  && vel.vy > 0.0f) || (s_right_blocked && vel.vy < 0.0f);
-        if (s_front_blocked && vel.vx > 0.0f) vel.vx = 0.0f;
-        if (s_back_blocked  && vel.vx < 0.0f) vel.vx = 0.0f;
-        if (s_left_blocked  && vel.vy > 0.0f) vel.vy = 0.0f;
-        if (s_right_blocked && vel.vy < 0.0f) vel.vy = 0.0f;
+        // ── 7c. Interlock (CODE_US): mở khóa khi đủ điều kiện (vật xa liên tục VÀ lệnh hướng đó đã về 0
+        //       trong chuỗi xa), rồi kẹp lệnh: hướng bị khóa về 0, vùng chậm 30–80 cm giới hạn tốc độ đi
+        //       về phía vật. Bước 10b vẫn ép PWM 0 (hãm) mỗi tick khi hướng bị khóa mà lệnh đi về phía đó.
+        // us_cut: tick này interlock đổi lệnh vận tốc (L95, đếm vào #us_end; từ CODE_US gồm cả kẹp vùng chậm)
+        bool us_cut = false;
+        if (g_obstacle_enabled) {
+            const bool toward[US_G_N] = { intent_fwd, intent_bwd, intent_left, intent_right };
+            us_guard_intent(&s_usg, &s_usg_cfg, toward);
+            us_sync_flags(t_now);
+            us_cut = us_guard_clamp(&s_usg, &s_usg_cfg, &vel.vx, &vel.vy);
+        }
 
         // ── 8–10. FK → hợp nhất IMU + giữ hướng → controller → IK → PWM ─────
         //         (controller/vel_ctrl.c, imu_fusion.c, heading.c)
@@ -789,7 +755,7 @@ void app_main(void) {
     }
 
     motor_enable(false);
-    g_us_mutex = xSemaphoreCreateMutex();
+    g_us_q = xQueueCreate(US_Q_SIZE, sizeof(us_item_t));   // CODE_US: mẫu siêu âm lõi 0 -> lõi 1
 
     if (!g_imu_fail) {
         buzzer_beep(2700, 100);

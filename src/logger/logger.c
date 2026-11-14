@@ -105,14 +105,14 @@ uint32_t logger_send_err(void) { return s_log_send_err; }
 
 #ifdef US_DIAG
 // ─────────────────────────────────────────
-// CODE_US (logger.h, us_diag.h): hàng đợi chẩn đoán riêng. Mỗi phần tử là một vòng đo (#usr) hay một
-// lần cờ chặn đổi (#usb). s_diag_drop đếm phần tử không vào được (hai task cùng ghi: cộng nguyên tử
+// CODE_US (logger.h, us_diag.h): hàng đợi chẩn đoán riêng. Mỗi phần tử là một lần phát (#usp) hay một
+// lần khóa đổi (#usb). s_diag_drop đếm phần tử không vào được (hai task cùng ghi: cộng nguyên tử
 // không cần vì chỉ để xem, đọc lệch một đơn vị không đổi kết luận).
 // ─────────────────────────────────────────
 typedef struct {
-    uint8_t kind;          // 0 = vòng đo, 1 = cờ chặn
+    uint8_t kind;          // 0 = một lần phát (#usp), 1 = khóa đổi (#usb)
     union {
-        us_diag_cycle_t cyc;
+        us_diag_ping_t  ping;
         us_diag_blk_t   blk;
     } u;
 } diag_item_t;
@@ -125,11 +125,11 @@ static void diag_queue_init(void) {
     if (s_diag_queue == NULL) ESP_LOGE(TAG, "Diag queue create failed");
 }
 
-void logger_push_usdiag_cycle(const us_diag_cycle_t *c) {
-    if (s_diag_queue == NULL || c == NULL) return;
+void logger_push_usdiag_ping(const us_diag_ping_t *p) {
+    if (s_diag_queue == NULL || p == NULL) return;
     diag_item_t it = { .kind = 0 };
-    it.u.cyc = *c;
-    it.u.cyc.drop = s_diag_drop;
+    it.u.ping = *p;
+    it.u.ping.drop = s_diag_drop;
     if (xQueueSend(s_diag_queue, &it, 0) != pdTRUE) s_diag_drop++;
 }
 
@@ -147,7 +147,7 @@ static void diag_drain(void) {
     static char dbuf[512];
     diag_item_t it;
     while (s_diag_queue != NULL && xQueueReceive(s_diag_queue, &it, 0) == pdTRUE) {
-        int n = it.kind == 0 ? us_diag_format_cycle(dbuf, sizeof(dbuf), &it.u.cyc)
+        int n = it.kind == 0 ? us_diag_format_ping(dbuf, sizeof(dbuf), &it.u.ping)
                              : us_diag_format_blk(dbuf, sizeof(dbuf), &it.u.blk);
         if (n < 0 || n >= (int)sizeof(dbuf)) { s_log_send_err++; continue; }
         if (sendto(sock, dbuf, n, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0)
