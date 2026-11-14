@@ -17,6 +17,9 @@ static const char *TAG = "LOGGER";
 static int              sock = -1;
 static struct sockaddr_in dest_addr;
 static QueueHandle_t    log_queue;
+#ifdef US_DIAG
+static void diag_queue_init(void);   // CODE_US, định nghĩa sau logger_send_err
+#endif
 
 // Mất log khép kín (spec controller–IMU v2.2 §8): log_seq tăng mỗi lần push (kể cả khi hàng đợi
 // đầy, nên PC thấy chỗ hổng), log_qdrop đếm dòng không vào được hàng đợi, log_send_err đếm sendto lỗi.
@@ -34,6 +37,9 @@ void logger_init(void) {
         ESP_LOGE(TAG, "Queue create failed");
         return;
     }
+#ifdef US_DIAG
+    diag_queue_init();
+#endif
 
     dest_addr.sin_family = AF_INET;
     dest_addr.sin_port   = htons(LOGGER_UDP_PORT);
@@ -96,6 +102,59 @@ uint32_t logger_seq_next(void) { return s_log_seq + 1; }
 uint32_t logger_seq(void)      { return s_log_seq; }
 uint32_t logger_qdrop(void)    { return s_log_qdrop; }
 uint32_t logger_send_err(void) { return s_log_send_err; }
+
+#ifdef US_DIAG
+// ─────────────────────────────────────────
+// CODE_US (logger.h, us_diag.h): hàng đợi chẩn đoán riêng. Mỗi phần tử là một vòng đo (#usr) hay một
+// lần cờ chặn đổi (#usb). s_diag_drop đếm phần tử không vào được (hai task cùng ghi: cộng nguyên tử
+// không cần vì chỉ để xem, đọc lệch một đơn vị không đổi kết luận).
+// ─────────────────────────────────────────
+typedef struct {
+    uint8_t kind;          // 0 = vòng đo, 1 = cờ chặn
+    union {
+        us_diag_cycle_t cyc;
+        us_diag_blk_t   blk;
+    } u;
+} diag_item_t;
+
+static QueueHandle_t     s_diag_queue;
+static volatile uint32_t s_diag_drop;
+
+static void diag_queue_init(void) {
+    s_diag_queue = xQueueCreate(LOGGER_DIAG_QUEUE_SIZE, sizeof(diag_item_t));
+    if (s_diag_queue == NULL) ESP_LOGE(TAG, "Diag queue create failed");
+}
+
+void logger_push_usdiag_cycle(const us_diag_cycle_t *c) {
+    if (s_diag_queue == NULL || c == NULL) return;
+    diag_item_t it = { .kind = 0 };
+    it.u.cyc = *c;
+    it.u.cyc.drop = s_diag_drop;
+    if (xQueueSend(s_diag_queue, &it, 0) != pdTRUE) s_diag_drop++;
+}
+
+void logger_push_usdiag_blk(const us_diag_blk_t *b) {
+    if (s_diag_queue == NULL || b == NULL) return;
+    diag_item_t it = { .kind = 1 };
+    it.u.blk = *b;
+    it.u.blk.drop = s_diag_drop;
+    if (xQueueSend(s_diag_queue, &it, 0) != pdTRUE) s_diag_drop++;
+}
+
+// Gửi hết hàng đợi chẩn đoán (gọi trong logger_task sau khi có socket). Lỗi định dạng hay sendto đếm
+// vào log_send_err như các dòng '#' khác.
+static void diag_drain(void) {
+    static char dbuf[512];
+    diag_item_t it;
+    while (s_diag_queue != NULL && xQueueReceive(s_diag_queue, &it, 0) == pdTRUE) {
+        int n = it.kind == 0 ? us_diag_format_cycle(dbuf, sizeof(dbuf), &it.u.cyc)
+                             : us_diag_format_blk(dbuf, sizeof(dbuf), &it.u.blk);
+        if (n < 0 || n >= (int)sizeof(dbuf)) { s_log_send_err++; continue; }
+        if (sendto(sock, dbuf, n, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0)
+            s_log_send_err++;
+    }
+}
+#endif
 
 // ─────────────────────────────────────────
 // Tạo UDP socket non-blocking
@@ -163,8 +222,14 @@ void logger_task(void *pv) {
     static char buf[1024];
 
     while (1) {
+#ifdef US_DIAG
+        // CODE_US: chờ tối đa 1 tick để hàng đợi chẩn đoán được gửi cả khi không có dòng dữ liệu
+        diag_drain();
+        if (xQueueReceive(log_queue, &data, pdMS_TO_TICKS(10)) != pdTRUE) continue;
+#else
         // Block cho đến khi có data — không busy-wait
         if (xQueueReceive(log_queue, &data, portMAX_DELAY) != pdTRUE) continue;
+#endif
         if (sock < 0) continue;
 
         if (data.kind == LOG_KIND_FW) {

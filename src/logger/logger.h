@@ -125,4 +125,14 @@ uint32_t logger_qdrop(void);
 uint32_t logger_send_err(void);
 void logger_task(void *pv);                 // tạo task trong app_main, core 0
 
+#ifdef US_DIAG
+// CODE_US (us_diag.h): hàng đợi chẩn đoán RIÊNG, không dùng log_queue, để phép chừa chỗ của #us
+// (logger_push_us: mọi phần tử log_queue do control_task đưa vào) và log_qdrop không đổi.
+// Non-blocking; đầy thì bỏ và đếm (trường drop của dòng sau).
+#include "us_diag.h"
+#define LOGGER_DIAG_QUEUE_SIZE 24
+void logger_push_usdiag_cycle(const us_diag_cycle_t *c);   // từ ultrasonic_task
+void logger_push_usdiag_blk(const us_diag_blk_t *b);       // từ control_task
+#endif
+
 #endif // LOGGER_H

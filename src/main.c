@@ -135,6 +135,28 @@ static void ultrasonic_task(void *pv) {
             g_us_data = filtered;
             xSemaphoreGive(g_us_mutex);
         }
+#ifdef US_DIAG
+        // CODE_US (us_diag.h): một dòng #usr cho vòng đo vừa xong, đẩy SAU khi đo và lọc xong
+        // (ngoài vòng chờ chân), trước lần nghỉ 20 ms như cũ. nv = số mẫu hợp lệ của bộ lọc.
+        {
+            static uint32_t s_cyc     = 0;
+            static int64_t  s_t_prev  = 0;
+            us_diag_cycle_t dc;
+            ultrasonic_diag_get(dc.s);
+            dc.t_us   = dc.s[0].t_trig;
+            dc.cyc    = ++s_cyc;
+            dc.cyc_us = s_t_prev > 0 ? (uint32_t)(dc.t_us - s_t_prev) : 0u;
+            s_t_prev  = dc.t_us;
+            dc.drop   = 0;   // logger điền
+            for (int i = 0; i < ULTRASONIC_COUNT; i++) {
+                int nv = 0;
+                for (int j = 0; j < 3; j++) if (buf[j].valid[i]) nv++;
+                dc.nv[i]  = (uint8_t)nv;
+                dc.d_f[i] = filtered.valid[i] ? filtered.distance_cm[i] : -1.0f;
+            }
+            logger_push_usdiag_cycle(&dc);
+        }
+#endif
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -509,6 +531,23 @@ static void control_task(void *pv) {
                 if (clear_count >= 3 && all_clear) s_obstacle = false;
             }
             s_last_update = t_now;
+#ifdef US_DIAG
+            // CODE_US (us_diag.h): #usb khi một cờ chặn đổi; d = giá trị lọc control vừa dùng
+            {
+                static uint8_t s_blk_prev[ULTRASONIC_COUNT] = {0};
+                uint8_t blk[ULTRASONIC_COUNT] = {
+                    s_front_blocked, s_back_blocked, s_left_blocked, s_right_blocked };
+                if (memcmp(blk, s_blk_prev, sizeof(blk)) != 0) {
+                    us_diag_blk_t db = { .t_us = t_now, .seq = logger_seq_next() };
+                    for (int i = 0; i < ULTRASONIC_COUNT; i++) {
+                        db.blk[i] = blk[i];
+                        db.d[i]   = us_snap.valid[i] ? us_snap.distance_cm[i] : -1.0f;
+                    }
+                    logger_push_usdiag_blk(&db);
+                    memcpy(s_blk_prev, blk, sizeof(blk));
+                }
+            }
+#endif
         }
         g_emergency_stop = s_obstacle;
 

@@ -31,4 +31,10 @@ typedef struct {
 void ultrasonic_init(void);
 void ultrasonic_read_all(us_data_t *data);
 
+#ifdef US_DIAG
+// CODE_US (us_diag.h): mẫu chẩn đoán của lần ultrasonic_read_all gần nhất; chỉ gọi từ ultrasonic_task
+#include "us_diag.h"
+void ultrasonic_diag_get(us_diag_sample_t out[ULTRASONIC_COUNT]);
+#endif
+
 #endif
