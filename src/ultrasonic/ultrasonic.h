@@ -71,6 +71,8 @@ int64_t ultrasonic_ping(void);
 // Thu kết quả của lần phát gần nhất. final = false: chỉ quyết cảm biến đã xong; true: quyết hết.
 // Trả mặt nạ bit các cảm biến được quyết TRONG lần gọi này (bit i ↔ out[i] mới).
 uint8_t ultrasonic_collect(us_meas_t out[ULTRASONIC_COUNT], bool final);
+// Chờ tới khi esp_timer ≥ t (bước 1 tick; tick 100 Hz). ultrasonic_task và ultrasonic_read_all dùng (US2-9).
+void ultrasonic_wait_until(int64_t t);
 
 // Bản chặn cho TEST_ULTRASONIC (src/tests/test_ultrasonic.c): một lần phát, chờ, thu cuối.
 typedef struct {

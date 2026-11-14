@@ -67,13 +67,16 @@ static volatile float            g_enc_rpm[4]     = {0};
 static volatile int32_t          g_enc_count[4]   = {0};
 // CODE_US (ultrasonic.h, us_guard.h): ultrasonic_task (lõi 0) gửi từng mẫu vào hàng đợi; control_task
 // (lõi 1) lấy hết mỗi tick và chạy us_guard. Thay g_us_data + mutex + cổng 50 ms của 5bde4c5.
+// US2-1 (Codex vòng 2, Liam 15/11 "Sửa hẹp + Codex vòng 3"): mỗi mẫu mang giờ phát và số phát, để control
+// biết mẫu cũ hay hở số phát (mẫu bị mất) thay vì tính tuổi theo giờ lấy ra.
 typedef struct {
     uint8_t  i;        // us_id_t
     uint8_t  kind;     // US_K_*
     float    cm;
+    int64_t  t_trig;   // esp_timer lúc phát
+    uint32_t ping;     // số phát (từ 1)
 } us_item_t;
-#define US_Q_SIZE 16
-#define US_STALE_US 200000LL   // 4 chu kỳ phát không có mẫu thì coi như UNKNOWN (US-4)
+#define US_Q_SIZE 16                // US_STALE_US, US_ITEM_MAX_AGE_US: us_guard.h (US2-1)
 static QueueHandle_t             g_us_q;
 
 static volatile bool g_obstacle_enabled = true;
@@ -111,40 +114,35 @@ static void traj_task(void *pv) {
 // US_COLLECT2_US; mỗi mẫu quyết xong gửi ngay vào g_us_q. Lọc, khóa, giảm tốc ở control_task (us_guard.c).
 // Sửa theo Codex Sol vòng 1 (Liam 15/11 "Sửa cả 14 + vòng 2"): chờ theo esp_timer, không theo số tick
 // (US-9); lần phát kế khi đã ≥ US_PING_MS sau lần trước, trễ thì không phát bù; gửi hỏng thì bật
-// g_us_overflow để control coi như không biết (US-4).
-static volatile bool g_us_overflow = false;
+// g_us_ovf_cnt để control coi như không biết (US-4). US2-1 (Codex vòng 2): cờ tràn thành bộ đếm (chỉ task
+// này ghi, control so với số đã thấy), mẫu mang giờ phát + số phát; chờ dùng ultrasonic_wait_until (US2-9).
+static volatile uint32_t g_us_ovf_cnt = 0;
 
-static void us_publish(const us_meas_t *m, uint8_t mask) {
+static void us_publish(const us_meas_t *m, uint8_t mask, int64_t t_trig, uint32_t ping) {
     if (g_us_q == NULL) return;
     for (int i = 0; i < ULTRASONIC_COUNT; i++) {
         if (!(mask & (1u << i))) continue;
-        us_item_t it = { .i = (uint8_t)i, .kind = m[i].kind, .cm = m[i].cm };
-        if (xQueueSend(g_us_q, &it, 0) != pdTRUE) g_us_overflow = true;
+        us_item_t it = { .i = (uint8_t)i, .kind = m[i].kind, .cm = m[i].cm, .t_trig = t_trig, .ping = ping };
+        if (xQueueSend(g_us_q, &it, 0) != pdTRUE) g_us_ovf_cnt++;
     }
 }
 
-// Chờ tới khi esp_timer ≥ t (bước 1 tick; tick 100 Hz)
-static void us_wait_until(int64_t t) {
-    while (esp_timer_get_time() < t) vTaskDelay(1);
-}
-
 static void ultrasonic_task(void *pv) {
-#ifdef US_DIAG
-    uint32_t seq = 0;
-#endif
+    uint32_t ping_no = 0;
     int64_t t_prev = 0;
     while (1) {
-        if (t_prev > 0) us_wait_until(t_prev + (int64_t)US_PING_MS * 1000);
+        if (t_prev > 0) ultrasonic_wait_until(t_prev + (int64_t)US_PING_MS * 1000);
         us_meas_t m[ULTRASONIC_COUNT] = {0};
         int64_t t_trig = ultrasonic_ping();
+        ping_no++;
         t_prev = t_trig;
-        us_wait_until(t_trig + US_COLLECT1_US);
-        us_publish(m, ultrasonic_collect(m, false));
-        us_wait_until(t_trig + US_COLLECT2_US);
-        us_publish(m, ultrasonic_collect(m, true));
+        ultrasonic_wait_until(t_trig + US_COLLECT1_US);
+        us_publish(m, ultrasonic_collect(m, false), t_trig, ping_no);
+        ultrasonic_wait_until(t_trig + US_COLLECT2_US);
+        us_publish(m, ultrasonic_collect(m, true), t_trig, ping_no);
 #ifdef US_DIAG
         // một dòng #usp mỗi lần phát, sau lần thu cuối (us_diag.h)
-        us_diag_ping_t dp = { .t_us = t_trig, .seq = ++seq };
+        us_diag_ping_t dp = { .t_us = t_trig, .seq = ping_no };
         for (int i = 0; i < ULTRASONIC_COUNT; i++) {
             dp.m[i] = (us_diag_meas_t){ .kind = m[i].kind, .why = m[i].why, .pre = m[i].pre,
                                         .stage = m[i].stage, .edges = m[i].edges, .glitch = m[i].glitch,
@@ -513,9 +511,12 @@ static void control_task(void *pv) {
         //       US-4 (Codex vòng 1, Liam 15/11 "Sửa cả 14 + vòng 2"): đặt lại thì bỏ mẫu tồn trong hàng
         //       đợi; hàng đợi tràn (g_us_overflow) hay một cảm biến quá US_STALE_US không có mẫu thì
         //       control nạp một mẫu UNKNOWN (đi vào đếm lỗi của us_guard, 10 lần liền là khóa).
-        static bool    s_usg_ready = false;
-        static bool    s_usg_en    = false;
-        static int64_t s_us_last[US_G_N];       // giờ mẫu (hay mẫu UNKNOWN nạp bù) gần nhất mỗi cảm biến
+        //       US2-1 (Codex vòng 2, Liam 15/11 "Sửa hẹp + Codex vòng 3"): us_feed_* (us_guard.c, có test PC):
+        //       bộ đếm tràn đổi thì UNKNOWN cho cả 4 TRƯỚC mẫu tồn; hở số phát thì UNKNOWN trước mẫu đó; mẫu
+        //       lấy ra muộn hơn US_ITEM_MAX_AGE_US kể từ lúc phát dùng như UNKNOWN; tuổi tính theo giờ phát.
+        static bool      s_usg_ready = false;
+        static bool      s_usg_en    = false;
+        static us_feed_t s_us_feed;
         if (!s_usg_ready || g_obstacle_enabled != s_usg_en) {
             if (!s_usg_ready) us_guard_cfg_default(&s_usg_cfg);
             us_guard_reset(&s_usg);
@@ -523,28 +524,18 @@ static void control_task(void *pv) {
                 us_item_t junk;
                 while (xQueueReceive(g_us_q, &junk, 0) == pdTRUE) { }
             }
-            for (int k = 0; k < US_G_N; k++) s_us_last[k] = t_now;
-            g_us_overflow = false;
+            us_feed_reset(&s_us_feed, t_now, g_us_ovf_cnt);
             s_usg_ready = true;
             s_usg_en    = g_obstacle_enabled;
         }
         if (g_obstacle_enabled) {
+            us_feed_overflow(&s_us_feed, &s_usg, &s_usg_cfg, g_us_ovf_cnt, t_now);
             us_item_t it;
             if (g_us_q != NULL) {
-                while (xQueueReceive(g_us_q, &it, 0) == pdTRUE) {
-                    if (it.i >= US_G_N) continue;
-                    us_guard_sample(&s_usg, &s_usg_cfg, it.i, it.kind, it.cm);
-                    s_us_last[it.i] = t_now;
-                }
+                while (xQueueReceive(g_us_q, &it, 0) == pdTRUE)
+                    us_feed_item(&s_us_feed, &s_usg, &s_usg_cfg, it.i, it.kind, it.cm, it.t_trig, it.ping, t_now);
             }
-            bool ovf = g_us_overflow;
-            if (ovf) g_us_overflow = false;
-            for (int k = 0; k < US_G_N; k++) {
-                if (ovf || g_us_q == NULL || t_now - s_us_last[k] > US_STALE_US) {
-                    us_guard_sample(&s_usg, &s_usg_cfg, k, US_K_UNKNOWN, 0.0f);
-                    s_us_last[k] = t_now;
-                }
-            }
+            us_feed_stale(&s_us_feed, &s_usg, &s_usg_cfg, t_now, g_us_q == NULL);
         } else if (g_us_q != NULL) {
             us_item_t junk;
             while (xQueueReceive(g_us_q, &junk, 0) == pdTRUE) { }   // SWB tắt: bỏ mẫu
@@ -635,8 +626,19 @@ static void control_task(void *pv) {
             // US-11 (Codex vòng 1): "nhả ga" chỉ tính khi nguồn lệnh hợp lệ (MANUAL có iBUS: cần về giữa;
             // AUTO có gói còn mới: PC gửi 0). Mất iBUS, WAITING: coi như vẫn giữ ga, khóa không mở.
             const bool cmd_ok = (g_mode == MODE_MANUAL && has_rc) || (g_mode == MODE_AUTO && traj_fresh);
-            const bool toward[US_G_N] = { intent_fwd || !cmd_ok, intent_bwd || !cmd_ok,
-                                          intent_left || !cmd_ok, intent_right || !cmd_ok };
+            // US2-5 (Codex vòng 2, Liam 15/11 "Sửa hẹp + Codex vòng 3"): MANUAL lấy "nhả ga" từ cần thô (trước
+            // khi nhân VRA): VRA = 0 mà cần vẫn đẩy về phía vật thì không tính là nhả ga.
+            bool raw_fwd = intent_fwd, raw_bwd = intent_bwd, raw_left = intent_left, raw_right = intent_right;
+            if (g_mode == MODE_MANUAL && has_rc) {
+                const int ly = ibus_channel_normalized(&rc, CH_LY);   // vx = +ly · scale
+                const int lx = ibus_channel_normalized(&rc, CH_LX);   // vy = −lx · scale
+                raw_fwd   = raw_fwd   || ly > 0;
+                raw_bwd   = raw_bwd   || ly < 0;
+                raw_left  = raw_left  || lx < 0;
+                raw_right = raw_right || lx > 0;
+            }
+            const bool toward[US_G_N] = { raw_fwd || !cmd_ok, raw_bwd || !cmd_ok,
+                                          raw_left || !cmd_ok, raw_right || !cmd_ok };
             us_guard_intent(&s_usg, &s_usg_cfg, toward);
             us_sync_flags(t_now);
             us_cut = us_guard_clamp(&s_usg, &s_usg_cfg, &vel.vx, &vel.vy);

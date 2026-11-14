@@ -121,3 +121,47 @@ bool us_guard_any_locked(const us_guard_t *g) {
     for (int i = 0; i < US_G_N; i++) if (g->locked[i]) return true;
     return false;
 }
+
+// US2-1: xem us_guard.h
+void us_feed_reset(us_feed_t *f, int64_t t_now, uint32_t ovf_cnt) {
+    memset(f, 0, sizeof(*f));
+    for (int i = 0; i < US_G_N; i++) f->last_t[i] = t_now;
+    f->ovf_seen = ovf_cnt;
+}
+
+bool us_feed_overflow(us_feed_t *f, us_guard_t *g, const us_guard_cfg_t *c, uint32_t ovf_cnt, int64_t t_now) {
+    if (ovf_cnt == f->ovf_seen) return false;
+    f->ovf_seen = ovf_cnt;
+    f->n_ovf++;
+    for (int i = 0; i < US_G_N; i++) {
+        us_guard_sample(g, c, i, US_K_UNKNOWN, 0.0f);
+        f->last_t[i] = t_now;
+    }
+    return true;
+}
+
+bool us_feed_item(us_feed_t *f, us_guard_t *g, const us_guard_cfg_t *c, int i, uint8_t kind, float cm,
+                  int64_t t_trig, uint32_t ping, int64_t t_now) {
+    if (i < 0 || i >= US_G_N) return false;
+    if (f->last_ping[i] != 0 && ping != f->last_ping[i] + 1u) {
+        f->n_gap++;
+        us_guard_sample(g, c, i, US_K_UNKNOWN, 0.0f);            // mẫu giữa bị mất
+    }
+    f->last_ping[i] = ping;
+    if (t_now - t_trig > US_ITEM_MAX_AGE_US) {
+        f->n_old++;
+        kind = US_K_UNKNOWN;                                     // mẫu cũ: không biết vật còn đó không
+    }
+    if (t_trig > f->last_t[i]) f->last_t[i] = t_trig;
+    return us_guard_sample(g, c, i, kind, cm);
+}
+
+void us_feed_stale(us_feed_t *f, us_guard_t *g, const us_guard_cfg_t *c, int64_t t_now, bool no_queue) {
+    for (int i = 0; i < US_G_N; i++) {
+        if (no_queue || t_now - f->last_t[i] > US_STALE_US) {
+            f->n_stale++;
+            us_guard_sample(g, c, i, US_K_UNKNOWN, 0.0f);
+            f->last_t[i] = t_now;
+        }
+    }
+}

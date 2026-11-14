@@ -71,4 +71,32 @@ float us_guard_vmax(const us_guard_t *g, const us_guard_cfg_t *c, int i);
 bool us_guard_clamp(const us_guard_t *g, const us_guard_cfg_t *c, float *vx, float *vy);
 bool us_guard_any_locked(const us_guard_t *g);
 
+// ─────────────────────────────────────────
+// Nhận mẫu từ hàng đợi (US2-1, Codex vòng 2; Liam 15/11 phiên CODE_US "Sửa hẹp + Codex vòng 3"). Mỗi mẫu
+// mang giờ phát t_trig và số phát ping (từ 1). Mẫu cũ hay mất không được mở khóa:
+//   - bộ đếm tràn hàng đợi đổi: nạp UNKNOWN cho cả 4 TRƯỚC khi lấy mẫu tồn (us_feed_overflow);
+//   - hở số phát của một cảm biến (mẫu giữa bị mất): nạp UNKNOWN trước mẫu đó;
+//   - mẫu lấy ra muộn hơn US_ITEM_MAX_AGE_US kể từ lúc phát: dùng như UNKNOWN;
+//   - một cảm biến quá US_STALE_US (theo giờ phát) không có mẫu: nạp UNKNOWN (us_feed_stale).
+// UNKNOWN cắt chuỗi xa (US-3), nên chuỗi 6 mẫu xa để mở khóa phải toàn mẫu mới, liền số phát.
+// ─────────────────────────────────────────
+#define US_STALE_US        200000LL   // 4 chu kỳ phát (US-4)
+#define US_ITEM_MAX_AGE_US 100000LL   // 2 chu kỳ phát; bình thường mẫu được lấy ra ≤ khoảng 40 ms sau khi phát
+
+typedef struct {
+    int64_t  last_t[US_G_N];     // giờ phát của mẫu gần nhất (hay giờ nạp UNKNOWN bù)
+    uint32_t last_ping[US_G_N];  // số phát của mẫu gần nhất (0 = chưa có từ lần đặt lại)
+    uint32_t ovf_seen;           // bộ đếm tràn đã xử lý
+    uint32_t n_gap, n_old, n_stale, n_ovf;   // số lần nạp UNKNOWN theo từng lý do (đếm cho log, test)
+} us_feed_t;
+
+void us_feed_reset(us_feed_t *f, int64_t t_now, uint32_t ovf_cnt);
+// Gọi mỗi tick TRƯỚC khi lấy mẫu tồn. Trả true nếu bộ đếm tràn đổi (đã nạp UNKNOWN cho cả 4).
+bool us_feed_overflow(us_feed_t *f, us_guard_t *g, const us_guard_cfg_t *c, uint32_t ovf_cnt, int64_t t_now);
+// Một mẫu lấy ra từ hàng đợi. Trả kết quả us_guard_sample của mẫu (true nếu trạng thái khóa đổi).
+bool us_feed_item(us_feed_t *f, us_guard_t *g, const us_guard_cfg_t *c, int i, uint8_t kind, float cm,
+                  int64_t t_trig, uint32_t ping, int64_t t_now);
+// Gọi mỗi tick SAU khi lấy hết mẫu; no_queue = không có hàng đợi (mọi cảm biến UNKNOWN).
+void us_feed_stale(us_feed_t *f, us_guard_t *g, const us_guard_cfg_t *c, int64_t t_now, bool no_queue);
+
 #endif // US_GUARD_H

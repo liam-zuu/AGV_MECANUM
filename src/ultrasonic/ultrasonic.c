@@ -234,11 +234,18 @@ uint8_t ultrasonic_collect(us_meas_t out[ULTRASONIC_COUNT], bool final) {
     return mask;
 }
 
+void ultrasonic_wait_until(int64_t t) {
+    while (esp_timer_get_time() < t) vTaskDelay(1);
+}
+
 void ultrasonic_read_all(us_data_t *data) {
+    // US2-9 (Codex vòng 2, Liam 15/11 "Sửa hẹp + Codex vòng 3"): chờ theo esp_timer như ultrasonic_task,
+    // không theo số tick (vTaskDelay(n) có thể dậy sớm gần một tick).
     us_meas_t m[ULTRASONIC_COUNT];
-    ultrasonic_ping();
-    vTaskDelay(pdMS_TO_TICKS(US_COLLECT2_US / 1000 + 10));
+    int64_t t_trig = ultrasonic_ping();
+    ultrasonic_wait_until(t_trig + US_COLLECT1_US);
     ultrasonic_collect(m, false);
+    ultrasonic_wait_until(t_trig + US_COLLECT2_US);
     ultrasonic_collect(m, true);
     for (int i = 0; i < ULTRASONIC_COUNT; i++) {
         data->valid[i]       = (m[i].kind == US_K_DIST);
