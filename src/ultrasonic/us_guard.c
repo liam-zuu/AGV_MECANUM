@@ -32,7 +32,13 @@ bool us_guard_sample(us_guard_t *g, const us_guard_cfg_t *c, int i, uint8_t kind
 
     if (kind == US_K_UNKNOWN) {
         if (g->unk_run[i] < 255) g->unk_run[i]++;
-        if (g->unk_run[i] < c->unknown_n) return false;     // giữ nguyên trạng thái
+        if (g->unk_run[i] < c->unknown_n) {
+            // US-3 (Codex vòng 1, Liam 15/11): giữ chuỗi gần (mẫu bận giữa hai mẫu gần vẫn khóa) nhưng
+            // cắt chuỗi xa và lần nhả ga của nó: không mở khóa khi không có unlock_n mẫu xa liền nhau
+            g->far_run[i]  = 0;
+            g->released[i] = 0;
+            return false;
+        }
         g->fault[i] = 1;                                     // cảm biến không trả lời: coi như gần
         near = true;
     } else {

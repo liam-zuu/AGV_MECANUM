@@ -13,15 +13,19 @@
 //   #usp,t=..,seq=..,drop=..,f=..,b=..,l=..,r=..
 //       một dòng mỗi lần phát, gửi sau lần thu cuối; t = esp_timer lúc phát (cùng đồng hồ với
 //       timestamp_us của CSV); seq = số lần phát. Mỗi cảm biến (f trước, b sau, l trái, r phải):
-//       k/cm/pre/stage/edges/rise/w
+//       k/cm/pre/stage/edges/rise/w/dec/why/gl
 //         k     d (có khoảng cách) | f (xa, không vọng trong tầm) | u (không biết)
-//         cm    khoảng cách (−1 nếu không phải d)
+//         cm    khoảng cách, 2 số lẻ (−1 nếu không phải d); bộ chấm tính lại từ w (US-15)
 //         pre   1 nếu ECHO đã cao lúc phát
-//         stage 0 quyết lúc phát (pre), 1 lần thu sau khoảng 10 ms, 2 lần thu cuối sau khoảng 30 ms
-//         edges số cạnh ngắt từ lúc phát tới lúc quyết (> 2: có xung nhiễu trên dây ECHO)
+//         stage 0 cao lúc phát (quyết ở lần thu 1), 1 lần thu khi ≥ 10 ms, 2 lần thu cuối khi ≥ 29 ms
+//         edges số lần ngắt từ lúc phát tới lúc quyết (> 2: có xung nhiễu trên dây ECHO)
 //         rise  µs từ lúc phát tới lúc ECHO lên; w µs độ rộng xung (f: thời gian cao tới lúc quyết)
+//         dec   µs từ lúc phát tới lúc quyết mẫu (US-16)
+//         why   - | r (FAR dùng lại) | b (bận lúc phát) | n (không lên) | t (lên muộn) | x (cạnh thừa) | e (quá
+//               nhiều cạnh) (ultrasonic.h US_WHY_*)
+//         gl    số xung < 2 cm đã bỏ trước xung được đo
 //   #usb,t=..,seq=..,drop=..,blk=FBLR,d=f/b/l/r
-//       mỗi khi trạng thái khóa một hướng đổi (control_task); t = t_now của tick; seq = log_seq dòng dữ
+//       mỗi khi trạng thái khóa một hướng đổi (control_task); t = esp_timer lúc cờ đổi; seq = log_seq dòng dữ
 //       liệu kế tiếp; blk = 4 chữ số 0/1 theo thứ tự trước, sau, trái, phải; d = khoảng cách đã biết gần
 //       nhất của us_guard (cm; 1000 = xa).
 //   drop: số bản ghi chẩn đoán không vào được hàng đợi chẩn đoán tính tới trước bản ghi này.
@@ -31,12 +35,15 @@
 
 typedef struct {
     uint8_t  kind;     // US_K_* (us_guard.h)
+    char     why;      // US_WHY_* (ultrasonic.h); 0 in thành '-'
     uint8_t  pre;
     uint8_t  stage;
     uint16_t edges;
+    uint8_t  glitch;
     float    cm;
     uint32_t rise_us;
     uint32_t w_us;
+    uint32_t dec_us;
 } us_diag_meas_t;
 
 typedef struct {

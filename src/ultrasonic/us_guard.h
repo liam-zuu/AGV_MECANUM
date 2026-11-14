@@ -15,8 +15,9 @@
 // Mỗi mẫu của một cảm biến là một trong ba loại:
 //   US_K_DIST    có khoảng cách (cm)
 //   US_K_FAR     không có vọng trong tầm (tính là xa, KHÔNG bỏ mẫu: một mẫu ngắn lẻ không đi thẳng ra)
-//   US_K_UNKNOWN cảm biến còn bận lúc phát, xung quá ngắn, không lên: giữ nguyên trạng thái
-// Khóa một hướng khi lock_n mẫu liền nhau DIST < lock_cm (mẫu UNKNOWN không cắt chuỗi). Mở khóa khi
+//   US_K_UNKNOWN cảm biến còn bận lúc phát, xung quá ngắn, không lên: giữ trạng thái khóa và chuỗi gần,
+//                nhưng cắt chuỗi xa (US-3, Codex vòng 1)
+// Khóa một hướng khi lock_n mẫu liền nhau DIST < lock_cm (mẫu UNKNOWN không cắt chuỗi gần). Mở khóa khi
 // đủ cả: unlock_n mẫu liền nhau xa (FAR, hay DIST > unlock_cm) VÀ trong chuỗi xa đó có ít nhất một tick
 // lệnh về hướng đó bằng 0 (MANUAL: ga về giữa; AUTO: PC gửi 0). unknown_n mẫu UNKNOWN liền nhau thì
 // coi như một mẫu gần và bật cờ lỗi (an toàn: cảm biến hỏng thì khóa; SWB tắt được).

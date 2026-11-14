@@ -106,8 +106,8 @@ uint32_t logger_send_err(void) { return s_log_send_err; }
 #ifdef US_DIAG
 // ─────────────────────────────────────────
 // CODE_US (logger.h, us_diag.h): hàng đợi chẩn đoán riêng. Mỗi phần tử là một lần phát (#usp) hay một
-// lần khóa đổi (#usb). s_diag_drop đếm phần tử không vào được (hai task cùng ghi: cộng nguyên tử
-// không cần vì chỉ để xem, đọc lệch một đơn vị không đổi kết luận).
+// lần khóa đổi (#usb). s_diag_drop đếm phần tử không vào được; hai task ở hai lõi cùng ghi nên đọc và
+// cộng trong vùng găng s_diag_mux (US-13, Codex vòng 1, Liam 15/11 "Sửa cả 14 + vòng 2").
 // ─────────────────────────────────────────
 typedef struct {
     uint8_t kind;          // 0 = một lần phát (#usp), 1 = khóa đổi (#usb)
@@ -119,6 +119,20 @@ typedef struct {
 
 static QueueHandle_t     s_diag_queue;
 static volatile uint32_t s_diag_drop;
+static portMUX_TYPE      s_diag_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static uint32_t diag_drop_get(void) {
+    portENTER_CRITICAL(&s_diag_mux);
+    uint32_t v = s_diag_drop;
+    portEXIT_CRITICAL(&s_diag_mux);
+    return v;
+}
+
+static void diag_drop_inc(void) {
+    portENTER_CRITICAL(&s_diag_mux);
+    s_diag_drop++;
+    portEXIT_CRITICAL(&s_diag_mux);
+}
 
 static void diag_queue_init(void) {
     s_diag_queue = xQueueCreate(LOGGER_DIAG_QUEUE_SIZE, sizeof(diag_item_t));
@@ -129,24 +143,26 @@ void logger_push_usdiag_ping(const us_diag_ping_t *p) {
     if (s_diag_queue == NULL || p == NULL) return;
     diag_item_t it = { .kind = 0 };
     it.u.ping = *p;
-    it.u.ping.drop = s_diag_drop;
-    if (xQueueSend(s_diag_queue, &it, 0) != pdTRUE) s_diag_drop++;
+    it.u.ping.drop = diag_drop_get();
+    if (xQueueSend(s_diag_queue, &it, 0) != pdTRUE) diag_drop_inc();
 }
 
 void logger_push_usdiag_blk(const us_diag_blk_t *b) {
     if (s_diag_queue == NULL || b == NULL) return;
     diag_item_t it = { .kind = 1 };
     it.u.blk = *b;
-    it.u.blk.drop = s_diag_drop;
-    if (xQueueSend(s_diag_queue, &it, 0) != pdTRUE) s_diag_drop++;
+    it.u.blk.drop = diag_drop_get();
+    if (xQueueSend(s_diag_queue, &it, 0) != pdTRUE) diag_drop_inc();
 }
 
-// Gửi hết hàng đợi chẩn đoán (gọi trong logger_task sau khi có socket). Lỗi định dạng hay sendto đếm
-// vào log_send_err như các dòng '#' khác.
+// Gửi tối đa LOGGER_DIAG_PER_LOOP bản ghi chẩn đoán mỗi vòng logger_task (US-12: dòng dữ liệu không phải
+// chờ cả hàng đợi chẩn đoán). Lỗi định dạng hay sendto đếm vào log_send_err như các dòng '#' khác.
+#define LOGGER_DIAG_PER_LOOP 2
 static void diag_drain(void) {
     static char dbuf[512];
     diag_item_t it;
-    while (s_diag_queue != NULL && xQueueReceive(s_diag_queue, &it, 0) == pdTRUE) {
+    for (int k = 0; k < LOGGER_DIAG_PER_LOOP &&
+                    s_diag_queue != NULL && xQueueReceive(s_diag_queue, &it, 0) == pdTRUE; k++) {
         int n = it.kind == 0 ? us_diag_format_ping(dbuf, sizeof(dbuf), &it.u.ping)
                              : us_diag_format_blk(dbuf, sizeof(dbuf), &it.u.blk);
         if (n < 0 || n >= (int)sizeof(dbuf)) { s_log_send_err++; continue; }

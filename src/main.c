@@ -73,6 +73,7 @@ typedef struct {
     float    cm;
 } us_item_t;
 #define US_Q_SIZE 16
+#define US_STALE_US 200000LL   // 4 chu kỳ phát không có mẫu thì coi như UNKNOWN (US-4)
 static QueueHandle_t             g_us_q;
 
 static volatile bool g_obstacle_enabled = true;
@@ -106,41 +107,52 @@ static void traj_task(void *pv) {
 // ─────────────────────────────────────────
 // CODE_US (Liam 14/11 phiên CODE_US "Duyệt, Codex trước buổi (Recommended)"; thiết kế hil
 // 03_CODE/docs/2026-11-14_Thiet_ke_CODE_US_v1.md mục 11.3): phát mỗi US_PING_MS cho cả 4 cảm biến (TRIG
-// chung), thu lần 1 sau US_COLLECT1_TICKS (vật gần đã xong), thu cuối sau US_COLLECT2_TICKS; mỗi mẫu
-// quyết xong gửi ngay vào g_us_q. Lọc, khóa, giảm tốc ở control_task (us_guard.c).
+// chung), thu lần 1 khi đã ≥ US_COLLECT1_US sau khi phát (vật gần đã xong), thu cuối khi đã ≥
+// US_COLLECT2_US; mỗi mẫu quyết xong gửi ngay vào g_us_q. Lọc, khóa, giảm tốc ở control_task (us_guard.c).
+// Sửa theo Codex Sol vòng 1 (Liam 15/11 "Sửa cả 14 + vòng 2"): chờ theo esp_timer, không theo số tick
+// (US-9); lần phát kế khi đã ≥ US_PING_MS sau lần trước, trễ thì không phát bù; gửi hỏng thì bật
+// g_us_overflow để control coi như không biết (US-4).
+static volatile bool g_us_overflow = false;
+
 static void us_publish(const us_meas_t *m, uint8_t mask) {
+    if (g_us_q == NULL) return;
     for (int i = 0; i < ULTRASONIC_COUNT; i++) {
         if (!(mask & (1u << i))) continue;
         us_item_t it = { .i = (uint8_t)i, .kind = m[i].kind, .cm = m[i].cm };
-        (void)xQueueSend(g_us_q, &it, 0);   // đầy (control dừng hơn 0,2 s) thì bỏ mẫu
+        if (xQueueSend(g_us_q, &it, 0) != pdTRUE) g_us_overflow = true;
     }
 }
 
+// Chờ tới khi esp_timer ≥ t (bước 1 tick; tick 100 Hz)
+static void us_wait_until(int64_t t) {
+    while (esp_timer_get_time() < t) vTaskDelay(1);
+}
+
 static void ultrasonic_task(void *pv) {
-    TickType_t last = xTaskGetTickCount();
 #ifdef US_DIAG
     uint32_t seq = 0;
 #endif
+    int64_t t_prev = 0;
     while (1) {
+        if (t_prev > 0) us_wait_until(t_prev + (int64_t)US_PING_MS * 1000);
         us_meas_t m[ULTRASONIC_COUNT] = {0};
         int64_t t_trig = ultrasonic_ping();
-        vTaskDelay(US_COLLECT1_TICKS);
+        t_prev = t_trig;
+        us_wait_until(t_trig + US_COLLECT1_US);
         us_publish(m, ultrasonic_collect(m, false));
-        vTaskDelay(US_COLLECT2_TICKS - US_COLLECT1_TICKS);
+        us_wait_until(t_trig + US_COLLECT2_US);
         us_publish(m, ultrasonic_collect(m, true));
 #ifdef US_DIAG
         // một dòng #usp mỗi lần phát, sau lần thu cuối (us_diag.h)
         us_diag_ping_t dp = { .t_us = t_trig, .seq = ++seq };
         for (int i = 0; i < ULTRASONIC_COUNT; i++) {
-            dp.m[i] = (us_diag_meas_t){ .kind = m[i].kind, .pre = m[i].pre, .stage = m[i].stage,
-                                        .edges = m[i].edges, .cm = m[i].cm, .rise_us = m[i].rise_us,
-                                        .w_us = m[i].w_us };
+            dp.m[i] = (us_diag_meas_t){ .kind = m[i].kind, .why = m[i].why, .pre = m[i].pre,
+                                        .stage = m[i].stage, .edges = m[i].edges, .glitch = m[i].glitch,
+                                        .cm = m[i].cm, .rise_us = m[i].rise_us, .w_us = m[i].w_us,
+                                        .dec_us = m[i].dec_us };
         }
         logger_push_usdiag_ping(&dp);
-#else
-        (void)t_trig;
 #endif
-        vTaskDelayUntil(&last, pdMS_TO_TICKS(US_PING_MS));
     }
 }
 
@@ -391,14 +403,14 @@ static void us_sync_flags(int64_t t_now) {
     static uint8_t s_blk_prev[US_G_N] = {0};
     uint8_t blk[US_G_N] = { s_front_blocked, s_back_blocked, s_left_blocked, s_right_blocked };
     if (memcmp(blk, s_blk_prev, sizeof(blk)) != 0) {
-        us_diag_blk_t db = { .t_us = t_now, .seq = logger_seq_next() };
+        // US-16: giờ lúc cờ đổi thật (sau khi lấy mẫu / mở khóa), không phải t_now đầu tick
+        us_diag_blk_t db = { .t_us = esp_timer_get_time(), .seq = logger_seq_next() };
         for (int k = 0; k < US_G_N; k++) { db.blk[k] = blk[k]; db.d[k] = s_usg.d_last[k]; }
         logger_push_usdiag_blk(&db);
         memcpy(s_blk_prev, blk, sizeof(blk));
     }
-#else
-    (void)t_now;
 #endif
+    (void)t_now;
 }
 
 // ─────────────────────────────────────────
@@ -498,18 +510,44 @@ static void control_task(void *pv) {
         //       03_CODE/docs/2026-11-14_Thiet_ke_CODE_US_v1.md mục 11.3). Mỗi mẫu dùng ngay ở tick này
         //       (bỏ cổng 50 ms của 5bde4c5). Mở khóa cần lệnh hướng đó về 0 (bước 7c, us_guard_intent).
         //       SWB tắt (hay đổi) thì đặt lại bộ khóa và bỏ mẫu: cờ chặn tắt ngay ở tick này.
-        static bool s_usg_ready = false;
-        static bool s_usg_en    = false;
+        //       US-4 (Codex vòng 1, Liam 15/11 "Sửa cả 14 + vòng 2"): đặt lại thì bỏ mẫu tồn trong hàng
+        //       đợi; hàng đợi tràn (g_us_overflow) hay một cảm biến quá US_STALE_US không có mẫu thì
+        //       control nạp một mẫu UNKNOWN (đi vào đếm lỗi của us_guard, 10 lần liền là khóa).
+        static bool    s_usg_ready = false;
+        static bool    s_usg_en    = false;
+        static int64_t s_us_last[US_G_N];       // giờ mẫu (hay mẫu UNKNOWN nạp bù) gần nhất mỗi cảm biến
         if (!s_usg_ready || g_obstacle_enabled != s_usg_en) {
             if (!s_usg_ready) us_guard_cfg_default(&s_usg_cfg);
             us_guard_reset(&s_usg);
+            if (g_us_q != NULL) {
+                us_item_t junk;
+                while (xQueueReceive(g_us_q, &junk, 0) == pdTRUE) { }
+            }
+            for (int k = 0; k < US_G_N; k++) s_us_last[k] = t_now;
+            g_us_overflow = false;
             s_usg_ready = true;
             s_usg_en    = g_obstacle_enabled;
         }
-        {
+        if (g_obstacle_enabled) {
             us_item_t it;
-            while (xQueueReceive(g_us_q, &it, 0) == pdTRUE)
-                if (g_obstacle_enabled) us_guard_sample(&s_usg, &s_usg_cfg, it.i, it.kind, it.cm);
+            if (g_us_q != NULL) {
+                while (xQueueReceive(g_us_q, &it, 0) == pdTRUE) {
+                    if (it.i >= US_G_N) continue;
+                    us_guard_sample(&s_usg, &s_usg_cfg, it.i, it.kind, it.cm);
+                    s_us_last[it.i] = t_now;
+                }
+            }
+            bool ovf = g_us_overflow;
+            if (ovf) g_us_overflow = false;
+            for (int k = 0; k < US_G_N; k++) {
+                if (ovf || g_us_q == NULL || t_now - s_us_last[k] > US_STALE_US) {
+                    us_guard_sample(&s_usg, &s_usg_cfg, k, US_K_UNKNOWN, 0.0f);
+                    s_us_last[k] = t_now;
+                }
+            }
+        } else if (g_us_q != NULL) {
+            us_item_t junk;
+            while (xQueueReceive(g_us_q, &junk, 0) == pdTRUE) { }   // SWB tắt: bỏ mẫu
         }
         us_sync_flags(t_now);
         g_emergency_stop = us_guard_any_locked(&s_usg);   // đèn đỏ + còi (led_task) theo khóa thật
@@ -594,7 +632,11 @@ static void control_task(void *pv) {
         // us_cut: tick này interlock đổi lệnh vận tốc (L95, đếm vào #us_end; từ CODE_US gồm cả kẹp vùng chậm)
         bool us_cut = false;
         if (g_obstacle_enabled) {
-            const bool toward[US_G_N] = { intent_fwd, intent_bwd, intent_left, intent_right };
+            // US-11 (Codex vòng 1): "nhả ga" chỉ tính khi nguồn lệnh hợp lệ (MANUAL có iBUS: cần về giữa;
+            // AUTO có gói còn mới: PC gửi 0). Mất iBUS, WAITING: coi như vẫn giữ ga, khóa không mở.
+            const bool cmd_ok = (g_mode == MODE_MANUAL && has_rc) || (g_mode == MODE_AUTO && traj_fresh);
+            const bool toward[US_G_N] = { intent_fwd || !cmd_ok, intent_bwd || !cmd_ok,
+                                          intent_left || !cmd_ok, intent_right || !cmd_ok };
             us_guard_intent(&s_usg, &s_usg_cfg, toward);
             us_sync_flags(t_now);
             us_cut = us_guard_clamp(&s_usg, &s_usg_cfg, &vel.vx, &vel.vy);
@@ -756,6 +798,7 @@ void app_main(void) {
 
     motor_enable(false);
     g_us_q = xQueueCreate(US_Q_SIZE, sizeof(us_item_t));   // CODE_US: mẫu siêu âm lõi 0 -> lõi 1
+    if (g_us_q == NULL) ESP_LOGE(TAG, "us queue create failed: ultrasonic samples = UNKNOWN (locks if SWB on)");
 
     if (!g_imu_fail) {
         buzzer_beep(2700, 100);

@@ -22,10 +22,11 @@ int us_diag_format_ping(char *buf, size_t n, const us_diag_ping_t *p) {
     if (len < 0 || (size_t)len >= n) return -1;
     for (int i = 0; i < US_DIAG_N; i++) {
         const us_diag_meas_t *m = &p->m[i];
-        int k = snprintf(buf + len, n - (size_t)len, ",%c=%c/%.1f/%u/%u/%u/%lu/%lu",
+        int k = snprintf(buf + len, n - (size_t)len, ",%c=%c/%.2f/%u/%u/%u/%lu/%lu/%lu/%c/%u",
                          k_name[i], us_diag_kind_char(m->kind), (double)m->cm, (unsigned)m->pre,
                          (unsigned)m->stage, (unsigned)m->edges, (unsigned long)m->rise_us,
-                         (unsigned long)m->w_us);
+                         (unsigned long)m->w_us, (unsigned long)m->dec_us, m->why ? m->why : '-',
+                         (unsigned)m->glitch);
         if (k < 0 || (size_t)k >= n - (size_t)len) return -1;
         len += k;
     }

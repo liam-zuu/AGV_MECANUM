@@ -29,26 +29,40 @@ typedef enum {
 // Ngắt GPIO hai cạnh ghi giờ esp_timer lúc ECHO lên, xuống: task khác chen không làm sai số đo
 // (thay vòng chờ bận của 5bde4c5, nghi vấn G4). Chỉ ultrasonic_task gọi ping/collect.
 //
-// Kết quả mỗi cảm biến mỗi lần phát (kind theo us_guard.h):
-//   US_K_DIST    xung xuống trong tầm, 2–400 cm
+// Kết quả mỗi cảm biến mỗi lần phát (kind theo us_guard.h; why cho biết vì sao, ghi vào log chẩn đoán):
+//   US_K_DIST    một xung 2–400 cm, không có cạnh thừa sau nó (xung < 2 cm trước đó bị bỏ, nghe tiếp)
 //   US_K_FAR     không có vọng trong tầm: xung dài hơn 400 cm, hay còn cao ở lần thu cuối; hoặc cảm biến
-//                còn cao từ lần phát trước mà lần trước đã là FAR (không nghe vọng nào từ đó, mẫu cũ ≤ 1 chu kỳ)
-//   US_K_UNKNOWN còn cao lúc phát mà lần trước không phải FAR; không lên tới lần thu cuối; xung < 2 cm
+//                còn cao lúc phát mà lần đo MỚI trước là FAR: dùng lại FAR đúng một lần (why = REUSED)
+//   US_K_UNKNOWN còn cao lúc phát lần thứ hai liền hay sau mẫu khác FAR (BUSY); không lên (NORISE); lên
+//                muộn hơn 5 ms (LATE); có cạnh sau khi xung xong (EXTRA); quá US_EDGE_MAX cạnh (EDGES)
+// Sửa theo Codex Sol vòng 1 (Liam 15/11 "Sửa cả 14 + vòng 2"): US-1, US-2, US-5, US-7, US-8, US-9, US-16.
 // ─────────────────────────────────────────
 
-#define US_PING_MS        50      // chu kỳ phát (20 Hz) [ĐỀ XUẤT, chốt theo buổi đo B1]
-#define US_COLLECT1_TICKS 1       // thu lần 1 sau 1 tick (khoảng 10 ms): vật gần (< khoảng 150 cm) đã xong
-#define US_COLLECT2_TICKS 3       // thu cuối sau 3 tick (khoảng 30 ms): đủ cho 400 cm (23,3 ms + lúc lên)
+#define US_PING_MS        50      // chu kỳ phát tối thiểu (20 Hz) [ĐỀ XUẤT, chốt theo buổi đo B1]
+#define US_COLLECT1_US    10000u  // thu lần 1 khi đã ≥ 10 ms sau khi phát: vật gần (< khoảng 150 cm) đã xong
 #define US_W_MAX_US       23324u  // 400 cm × 2 / 0,0343
+#define US_COLLECT2_US    29000u  // thu cuối khi đã ≥ 29 ms sau khi phát: lên muộn nhất 5 ms + 23,3 ms (US-9)
+#define US_EDGE_MAX       16      // quá số cạnh này trong một lần đo thì tắt ngắt chân đó, mẫu UNKNOWN (US-8)
+
+#define US_WHY_NONE   '-'
+#define US_WHY_REUSED 'r'
+#define US_WHY_BUSY   'b'
+#define US_WHY_NORISE 'n'
+#define US_WHY_LATE   't'
+#define US_WHY_EXTRA  'x'
+#define US_WHY_EDGES  'e'
 
 typedef struct {
     uint8_t  kind;      // US_K_*
+    char     why;       // US_WHY_*
     float    cm;        // chỉ có nghĩa khi DIST
     uint8_t  pre;       // ECHO cao lúc phát
-    uint8_t  stage;     // 1 = thu lần 1, 2 = thu cuối, 0 = quyết ngay lúc phát (pre)
-    uint16_t edges;     // số cạnh ngắt thấy từ lúc phát tới lúc quyết (> 2: có xung nhiễu)
+    uint8_t  stage;     // 1 = thu lần 1, 2 = thu cuối, 0 = quyết lúc thu lần 1 vì cao lúc phát
+    uint16_t edges;     // số lần ngắt từ lúc phát tới lúc quyết
+    uint8_t  glitch;    // số xung < 2 cm đã bỏ
     uint32_t rise_us;   // từ lúc phát tới lúc ECHO lên (0 nếu không lên)
     uint32_t w_us;      // độ rộng xung (DIST), hay thời gian cao tới lúc quyết (FAR)
+    uint32_t dec_us;    // từ lúc phát tới lúc quyết mẫu (US-16)
 } us_meas_t;
 
 void ultrasonic_init(void);
