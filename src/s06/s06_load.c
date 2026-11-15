@@ -253,8 +253,13 @@ static void tx_task(void *pv) {
 
     int64_t t_stat = esp_timer_get_time() + S06_STAT_US;
     s06_ev_t e;
+    // Chờ ít nhất 1 tick (S06 buổi thử 15/11, CODE_S06; Liam "Sửa 1 dòng, nạp lại, chạy tiếp"):
+    // tick 100 Hz (sdkconfig.s06_load) nên pdMS_TO_TICKS(2) = 0, task không bao giờ chờ, quay vòng
+    // chiếm CPU 0 (task_wdt: IDLE0, "CPU 0: s06_tx"), logger_task (ưu tiên 1) không chạy, log 100 Hz
+    // mất gần hết (05_DATA/results/S06/2026-11-15_run01_thu/T6). 1 tick = 10 ms: vòng đệm E (1 s) vẫn đủ.
+    const TickType_t wait = pdMS_TO_TICKS(2) > 0 ? pdMS_TO_TICKS(2) : 1;
     while (1) {
-        if (xQueueReceive(s_q, &e, pdMS_TO_TICKS(2)) == pdTRUE) {
+        if (xQueueReceive(s_q, &e, wait) == pdTRUE) {
             format_ev(&e);
             while (xQueueReceive(s_q, &e, 0) == pdTRUE) format_ev(&e);
         }
