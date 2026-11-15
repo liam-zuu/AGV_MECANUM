@@ -236,6 +236,63 @@ static void format_stat(int64_t t_now) {
     append(l, n < (int)sizeof l ? n : (int)sizeof l - 1);
 }
 
+// ─── CPU từng task mỗi 1 s (Liam 15/11, CODE_S06 "Bỏ tải + đo CPU") ──────────
+// Dòng văn bản "#cpu,run=..,win_us=..,<task>@<lõi>=<phần nghìn>,..,qseq=" sau dòng S: thời gian chạy của mỗi
+// task trong khoảng từ lần trước (bộ đếm run-time stats theo esp_timer 1 µs, hiệu không dấu: đúng qua chỗ tràn
+// 32 bit), phần nghìn của một lõi; lõi 0, 1 hay x (không ghim). Xếp giảm dần, cắt khi dòng gần đầy; task chạy 0 µs
+// trong khoảng không in (IDLE0 vắng mặt = CPU 0 không rảnh lúc nào). Nhiều hơn S06_CPU_TASKS task: "#cpu,..,err=tasks".
+// Chỉ khi sdkconfig.s06_load bật CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS.
+#if (configGENERATE_RUN_TIME_STATS == 1) && (configUSE_TRACE_FACILITY == 1)
+#define S06_CPU_TASKS 40
+static TaskStatus_t                s_cpu_st[S06_CPU_TASKS];
+static TaskHandle_t                s_cpu_h[S06_CPU_TASKS];
+static configRUN_TIME_COUNTER_TYPE s_cpu_prev[S06_CPU_TASKS];
+static int                         s_cpu_n;
+static int64_t                     s_cpu_t_prev;
+
+static void format_cpu(int64_t t_now) {
+    configRUN_TIME_COUNTER_TYPE total;
+    UBaseType_t n = uxTaskGetSystemState(s_cpu_st, S06_CPU_TASKS, &total);
+    int64_t win = s_cpu_t_prev ? t_now - s_cpu_t_prev : 0;
+    s_cpu_t_prev = t_now;
+    if (n == 0) {                                          // array too small: say so, reset the baseline
+        s_cpu_n = 0;
+        char l[96];
+        int m = snprintf(l, sizeof l, "#cpu,run=%u,err=tasks>%d,qseq=%lu\n", (unsigned)s_run_id, S06_CPU_TASKS,
+                         (unsigned long)++s_qseq);
+        append(l, m < (int)sizeof l ? m : (int)sizeof l - 1);
+        return;
+    }
+    uint32_t d[S06_CPU_TASKS];
+    for (UBaseType_t i = 0; i < n; i++) {
+        d[i] = 0;
+        for (int k = 0; k < s_cpu_n; k++)
+            if (s_cpu_h[k] == s_cpu_st[i].xHandle) { d[i] = s_cpu_st[i].ulRunTimeCounter - s_cpu_prev[k]; break; }
+    }
+    for (UBaseType_t i = 0; i < n; i++) { s_cpu_h[i] = s_cpu_st[i].xHandle; s_cpu_prev[i] = s_cpu_st[i].ulRunTimeCounter; }
+    s_cpu_n = (int)n;
+    if (win <= 0) return;                                  // first call: counters only
+    char t[256];
+    int len = snprintf(t, sizeof t, "cpu,run=%u,win_us=%lld", (unsigned)s_run_id, (long long)win);
+    bool used[S06_CPU_TASKS] = { false };
+    for (UBaseType_t r = 0; r < n && len < (int)sizeof t - 40; r++) {
+        int best = -1;
+        for (UBaseType_t i = 0; i < n; i++)
+            if (!used[i] && (best < 0 || d[i] > d[best])) best = (int)i;
+        if (best < 0 || d[best] == 0) break;
+        used[best] = true;
+        BaseType_t c = xTaskGetCoreID(s_cpu_st[best].xHandle);
+        len += snprintf(t + len, sizeof t - len, ",%.12s@%c=%lu", s_cpu_st[best].pcTaskName,
+                        c == 0 ? '0' : (c == 1 ? '1' : 'x'), (unsigned long)((uint64_t)d[best] * 1000u / (uint64_t)win));
+    }
+    char l[300];
+    int m = snprintf(l, sizeof l, "#%s,qseq=%lu\n", t, (unsigned long)++s_qseq);
+    append(l, m < (int)sizeof l ? m : (int)sizeof l - 1);
+}
+#else
+static void format_cpu(int64_t t_now) { (void)t_now; }
+#endif
+
 static void tx_task(void *pv) {
     while (!wifi_is_connected()) vTaskDelay(pdMS_TO_TICKS(200));
     s_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -275,6 +332,7 @@ static void tx_task(void *pv) {
         int64_t now = esp_timer_get_time();
         if (now >= t_stat) {
             format_stat(now);
+            format_cpu(now);
             t_stat += S06_STAT_US;
         }
         flush_pkt();

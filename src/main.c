@@ -82,7 +82,9 @@ static void traj_task(void *pv) {
         traj_receiver_snapshot(&s);
         bool fresh = traj_receiver_is_fresh(&s, esp_timer_get_time());
         if (fresh) {
+#ifndef S06_LOAD   // S06: 100 dòng/s ra UART trên CPU 0 (Liam 15/11 CODE_S06 "Bỏ tải + đo CPU")
             ESP_LOGI(TAG, "traj fresh src=%d vx=%.2f", s.src, s.sp.vx);  // thêm
+#endif
             taskENTER_CRITICAL(&g_traj_mux);
             g_setpoint     = s.sp;
             g_last_traj_us = s.t_rx_us;
@@ -92,6 +94,7 @@ static void traj_task(void *pv) {
     }
 }
 
+#ifndef S06_LOAD   // S06: task không chạy (app_main), hàm cũng bỏ để không cảnh báo hàm không dùng
 // ─────────────────────────────────────────
 // CORE 0 - ultrasonic_task (priority 1)
 // ─────────────────────────────────────────
@@ -138,6 +141,7 @@ static void ultrasonic_task(void *pv) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
+#endif
 
 // ─────────────────────────────────────────
 // CORE 0 - led_task (priority 2)
@@ -727,7 +731,9 @@ void app_main(void) {
         g_imu_fail = true;     // motor không bao giờ bật; led_task báo; log mang imu_init (§7, §8)
         ESP_LOGE(TAG, "IMU_INIT_FAIL %d (%s): motors stay disabled", imu_rc, imu_init_err_str(imu_rc));
     }
+#ifndef S06_LOAD   // S06: không có cảm biến trên bàn; GPIO35–39 để cho T3 (thiết kế env §9)
     ultrasonic_init();
+#endif
     traj_receiver_init();
     logger_init();
 #ifdef S06_LOAD
@@ -765,7 +771,10 @@ void app_main(void) {
     xTaskCreatePinnedToCore(ibus_task,       "ibus",       4096, NULL, 4, NULL, 0);
     xTaskCreatePinnedToCore(traj_task,       "traj",       4096, NULL, 3, NULL, 0);
     xTaskCreatePinnedToCore(led_task,        "led",        4096, NULL, 2, NULL, 0);
+#ifndef S06_LOAD   // S06 (Liam 15/11 CODE_S06 "Bỏ tải + đo CPU"): chờ bận ~5 ms mỗi cảm biến khi không có
+                   // tiếng vọng, cỡ 1/3 CPU 0 ở ưu tiên của logger (ước lượng từ code, chưa đo)
     xTaskCreatePinnedToCore(ultrasonic_task, "ultrasonic", 4096, NULL, 1, NULL, 0);
+#endif
     xTaskCreatePinnedToCore(logger_task,     "logger",     4096, NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(encoder_task,    "encoder",    4096, NULL, 6, NULL, 1);
     xTaskCreatePinnedToCore(control_task,    "control",    4096, NULL, 5, NULL, 1);
