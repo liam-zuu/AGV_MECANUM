@@ -244,8 +244,9 @@ static void format_stat(int64_t t_now) {
 // - Task khác: danh sách tên cố định S06_CPU_NAMES (tên lưu tối đa 15 byte), handle lấy MỘT lần ở lần đọc đầu
 //   (xTaskGetHandle), lần đọc đầu chỉ làm khi đã có lượt (s_run_id > 0: app_main đã tạo xong mọi task); mỗi lần đọc
 //   vTaskGetInfo(.., pdFALSE, ..): không quét stack. nf = số tên không tìm thấy lúc đó (không bao giờ in).
-//   sum = IDLE0 + IDLE1 + mọi task in được, phần nghìn của một lõi (hai lõi = 2000): phần thiếu là ngắt, task
-//   ngoài danh sách, sai lệch cửa sổ.
+//   sum = IDLE0 + IDLE1 + mọi task có handle (kể cả bị cut), phần nghìn của một lõi (hai lõi = 2000): phần thiếu
+//   là task ngoài danh sách, sai lệch cửa sổ, và làm tròn xuống từng mục (tới 1 ‰ mỗi mục). Thời gian ISR KHÔNG
+//   tách ra được: kernel cộng nó vào task bị ngắt, kể cả IDLE (Codex vòng 3 AGVS06-R3-1).
 //   Giới hạn (Codex vòng 2 AGVS06-3, -4): logger, traj_wifi, gain_rx, s06_cmd tự xóa khi socket/bind lỗi, không
 //   đồng bộ với lần đọc đầu, và xTaskGetHandle còn thấy task đã xóa đang chờ thu hồi; khi đó handle có thể trỏ vào
 //   TCB đã giải phóng. Lượt có dòng lỗi socket/bind của các task đó ở serial thì không dùng dòng #cpu.
