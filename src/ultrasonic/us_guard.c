@@ -126,6 +126,7 @@ bool us_guard_any_locked(const us_guard_t *g) {
 void us_feed_reset(us_feed_t *f, int64_t t_now, uint32_t ovf_cnt) {
     memset(f, 0, sizeof(*f));
     for (int i = 0; i < US_G_N; i++) f->last_t[i] = t_now;
+    f->t_reset  = t_now;
     f->ovf_seen = ovf_cnt;
 }
 
@@ -143,14 +144,23 @@ bool us_feed_overflow(us_feed_t *f, us_guard_t *g, const us_guard_cfg_t *c, uint
 bool us_feed_item(us_feed_t *f, us_guard_t *g, const us_guard_cfg_t *c, int i, uint8_t kind, float cm,
                   int64_t t_trig, uint32_t ping, int64_t t_now) {
     if (i < 0 || i >= US_G_N) return false;
-    if (f->last_ping[i] != 0 && ping != f->last_ping[i] + 1u) {
+    if (t_trig < f->t_reset) {                                   // phát trước lần đặt lại (SWB)
+        f->n_pre_reset++;
+        return false;
+    }
+    if (f->have_ping[i] && ping != f->last_ping[i] + 1u) {       // US3-2: so theo modulo uint32_t
         f->n_gap++;
         us_guard_sample(g, c, i, US_K_UNKNOWN, 0.0f);            // mẫu giữa bị mất
+    } else if (t_trig - f->last_t[i] > US_STALE_US) {            // US3-1: im quá lâu trước mẫu này
+        f->n_silent++;
+        us_guard_sample(g, c, i, US_K_UNKNOWN, 0.0f);
     }
+    f->have_ping[i] = 1;
     f->last_ping[i] = ping;
-    if (t_now - t_trig > US_ITEM_MAX_AGE_US) {
+    const int64_t age = t_now - t_trig;
+    if (age < 0 || age > US_ITEM_MAX_AGE_US) {
         f->n_old++;
-        kind = US_K_UNKNOWN;                                     // mẫu cũ: không biết vật còn đó không
+        kind = US_K_UNKNOWN;                                     // mẫu cũ (hay giờ sai): không biết vật còn đó không
     }
     if (t_trig > f->last_t[i]) f->last_t[i] = t_trig;
     return us_guard_sample(g, c, i, kind, cm);
@@ -158,10 +168,11 @@ bool us_feed_item(us_feed_t *f, us_guard_t *g, const us_guard_cfg_t *c, int i, u
 
 void us_feed_stale(us_feed_t *f, us_guard_t *g, const us_guard_cfg_t *c, int64_t t_now, bool no_queue) {
     for (int i = 0; i < US_G_N; i++) {
-        if (no_queue || t_now - f->last_t[i] > US_STALE_US) {
+        if (no_queue || t_now - f->last_t[i] >= US_STALE_US) {
             f->n_stale++;
             us_guard_sample(g, c, i, US_K_UNKNOWN, 0.0f);
-            f->last_t[i] = t_now;
+            // vẫn im thì nạp lại sau US_STALE_REPEAT_US (một chu kỳ phát), không đợi thêm US_STALE_US
+            f->last_t[i] = t_now - US_STALE_US + US_STALE_REPEAT_US;
         }
     }
 }

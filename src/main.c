@@ -514,6 +514,7 @@ static void control_task(void *pv) {
         //       US2-1 (Codex vòng 2, Liam 15/11 "Sửa hẹp + Codex vòng 3"): us_feed_* (us_guard.c, có test PC):
         //       bộ đếm tràn đổi thì UNKNOWN cho cả 4 TRƯỚC mẫu tồn; hở số phát thì UNKNOWN trước mẫu đó; mẫu
         //       lấy ra muộn hơn US_ITEM_MAX_AGE_US kể từ lúc phát dùng như UNKNOWN; tuổi tính theo giờ phát.
+        //       Vòng 3: xem us_guard.h (US3-1, US3-2, nhịp UNKNOWN khi im, bỏ mẫu phát trước lần đặt lại).
         static bool      s_usg_ready = false;
         static bool      s_usg_en    = false;
         static us_feed_t s_us_feed;
@@ -529,13 +530,20 @@ static void control_task(void *pv) {
             s_usg_en    = g_obstacle_enabled;
         }
         if (g_obstacle_enabled) {
-            us_feed_overflow(&s_us_feed, &s_usg, &s_usg_cfg, g_us_ovf_cnt, t_now);
-            us_item_t it;
+            // US3-1 (Codex vòng 3, Liam 15/11 "Sửa, đo, vòng 4 sau"): lấy hết mẫu ra mảng tạm, RỒI đọc bộ
+            // đếm tràn (tràn trong lúc lấy cũng thấy, UNKNOWN cả 4 trước mẫu), rồi xử lý với giờ đọc lúc này
+            // (không phải t_now đầu tick: control bị chen giữa đầu tick và đây thì tuổi mẫu vẫn đúng).
+            static us_item_t batch[US_Q_SIZE];   // static: không thêm khoảng 400 byte vào stack control
+            int nb = 0;
             if (g_us_q != NULL) {
-                while (xQueueReceive(g_us_q, &it, 0) == pdTRUE)
-                    us_feed_item(&s_us_feed, &s_usg, &s_usg_cfg, it.i, it.kind, it.cm, it.t_trig, it.ping, t_now);
+                while (nb < US_Q_SIZE && xQueueReceive(g_us_q, &batch[nb], 0) == pdTRUE) nb++;
             }
-            us_feed_stale(&s_us_feed, &s_usg, &s_usg_cfg, t_now, g_us_q == NULL);
+            const int64_t t_rx = esp_timer_get_time();
+            us_feed_overflow(&s_us_feed, &s_usg, &s_usg_cfg, g_us_ovf_cnt, t_rx);
+            for (int n = 0; n < nb; n++)
+                us_feed_item(&s_us_feed, &s_usg, &s_usg_cfg, batch[n].i, batch[n].kind, batch[n].cm,
+                             batch[n].t_trig, batch[n].ping, t_rx);
+            us_feed_stale(&s_us_feed, &s_usg, &s_usg_cfg, t_rx, g_us_q == NULL);
         } else if (g_us_q != NULL) {
             us_item_t junk;
             while (xQueueReceive(g_us_q, &junk, 0) == pdTRUE) { }   // SWB tắt: bỏ mẫu
