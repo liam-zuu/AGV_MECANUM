@@ -16,12 +16,16 @@ static const char *const NAMES_PID[GAIN_N]  = { "kp_xy", "ki_xy", "kp_wz", "ki_w
 static const char *const NAMES_ADRC[GAIN_N] = { "omega_c_xy", "omega_o_xy", "omega_c_wz", "omega_o_wz",
                                                 "pos_kp", "pos_ki", "k_psi" };
 
-// Giới hạn an toàn [ĐỀ XUẤT 12/11, chặn số vô lý; miền tune là việc của script chiến dịch].
-// LADRC omega_o < 50: beta1*dt = 2*omega_o*0.01 < 1 (adrc.c).
-static const float LO_PID[GAIN_N]  = { 0.0f,  0.0f, 0.0f,  0.0f, 0.0f,  0.0f, 0.0f };
-static const float HI_PID[GAIN_N]  = { 20.0f, 50.0f, 20.0f, 50.0f, 30.0f, 30.0f, 10.0f };
-static const float LO_ADRC[GAIN_N] = { 0.5f,  1.0f, 0.5f,  1.0f, 0.0f,  0.0f, 0.0f };
-static const float HI_ADRC[GAIN_N] = { 50.0f, 49.0f, 50.0f, 49.0f, 30.0f, 30.0f, 10.0f };
+// Bảng chặn binary chiến dịch (L142, Liam 21/11: chỉ đổi bảng, giữ mọi kẹp). Chặn số vô lý từng gain;
+// miền tune và tam giác LADRC omega_c + 2*omega_o < 200 mỗi trục là việc của script (gain_table.py).
+// Trần: S03 v8.6 mục 2.1 (Liam duyệt 22/11); căn cứ 03_CODE/docs/review/2026-11-21_Fable_API_can_cu_nhom1/
+// vong6/Can_cu_bang_chan_moi.md. Cận dưới: vong3/ket_luan_da_kiem.md dòng 1a-1e; 0 chỉ ở hệ số tích phân
+// (ki_xy, ki_wz, pos_ki: tắt được, PI thành P); kp, omega_c, omega_o, pos_kp, k_psi không tắt (vòng vị trí,
+// vòng hướng IMU luôn bật, QĐ 23). Thứ tự theo NAMES_PID / NAMES_ADRC.
+static const float LO_PID[GAIN_N]  = { 0.001f,   0.0f,    0.001f,  0.0f,   0.0004f, 0.0f,     0.0027f };
+static const float HI_PID[GAIN_N]  = { 41.0f,    1500.0f, 4.6f,    230.0f, 200.0f,  5500.0f,  50.0f   };
+static const float LO_ADRC[GAIN_N] = { 0.00585f, 0.03f,   0.0103f, 0.03f,  0.0004f, 0.0f,     0.0027f };
+static const float HI_ADRC[GAIN_N] = { 200.0f,   100.0f,  200.0f,  100.0f, 200.0f,  40000.0f, 50.0f   };
 
 static uint32_t s_id;          // id của bộ đang chạy; 0 = gain build sẵn
 static uint32_t s_applied_n;   // số lần áp thành công từ lúc khởi động
